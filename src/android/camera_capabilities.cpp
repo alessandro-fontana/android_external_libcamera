@@ -572,90 +572,130 @@ int CameraCapabilities::initializeStreamConfigurations()
 
 		/*
 		 * JPEG is always supported, either produced directly by the
-		 * camera, or encoded in the HAL.
+		 * camera, or encoded in the HAL. Try to find MJPEG support first,
+		 * but allow fallback to software encoding via conversion.
 		 */
-		if (androidFormat == HAL_PIXEL_FORMAT_BLOB) {
-			formatsMap_[androidFormat] = formats::MJPEG;
-			LOG(HAL, Debug) << "Mapped Android format "
-					<< camera3Format.name << " to "
-					<< formats::MJPEG
-					<< " (fixed mapping)";
-			continue;
-		}
-
-		/*
-		 * Test the libcamera formats that can produce images
-		 * compatible with the format defined by Android.
-		 */
+		bool formatMapped = false;
 		PixelFormat mappedFormat;
-		for (const PixelFormat &pixelFormat : libcameraFormats) {
-
-			LOG(HAL, Debug) << "Testing " << pixelFormat;
-
-			/*
-			 * The stream configuration size can be adjusted.
-			 * The pixel format might be converted via libyuv.
-			 * Conversion check is done in another loop after
-			 * testing native supported formats.
-			 *
-			 * \todo This could be simplified once all pipeline
-			 * handlers will report the StreamFormats list of
-			 * supported formats.
-			 */
-			cfg.pixelFormat = pixelFormat;
-
-			CameraConfiguration::Status status = cameraConfig->validate();
-			if (status != CameraConfiguration::Invalid &&
-			    cfg.pixelFormat == pixelFormat) {
-				mappedFormat = pixelFormat;
-				break;
+		
+		if (androidFormat == HAL_PIXEL_FORMAT_BLOB) {
+			/* First try to find direct MJPEG support */
+			for (const PixelFormat &pixelFormat : libcameraFormats) {
+				if (pixelFormat == formats::MJPEG) {
+					cfg.pixelFormat = pixelFormat;
+					CameraConfiguration::Status status = cameraConfig->validate();
+					if (status != CameraConfiguration::Invalid &&
+					    cfg.pixelFormat == pixelFormat) {
+						formatsMap_[androidFormat] = formats::MJPEG;
+						LOG(HAL, Debug) << "Mapped Android format "
+								<< camera3Format.name << " to "
+								<< formats::MJPEG
+								<< " (direct support)";
+						formatMapped = true;
+						break;
+					}
+				}
 			}
-		}
+			
+			/* If no direct MJPEG support, try conversion for JPEG-compatible formats */
+			if (!formatMapped) {
+				for (const auto &[inputFormat, outputFormats] : yuvConversions) {
+					for (const PixelFormat &outputFormat : outputFormats) {
+						/* Check if output format is supported by JPEG encoder */
+						if (outputFormat == formats::NV12 || outputFormat == formats::NV21 ||
+						    outputFormat == formats::RGB888 || outputFormat == formats::BGR888) {
+							
+							/* Check if camera can produce the input format */
+							cfg.pixelFormat = inputFormat;
+							CameraConfiguration::Status status = cameraConfig->validate();
 
-		if (!mappedFormat.isValid()) {
-			/* If the format is not mandatory, skip it. */
-			if (!camera3Format.mandatory)
-				continue;
-		}
-
-		/*
-		 * Test if we can map the format via a software conversion.
-		 * This means that the converter can produce an "output" that is
-		 * compatible with the format defined in Android.
-		 */
-		bool needConversion = false;
-		for (const PixelFormat &pixelFormat : libcameraFormats) {
-
-			LOG(HAL, Debug) << "Testing " << pixelFormat << " using conversion";
-
-			/* \todo move this into a separate function */
-			for (const auto &[inputFormat, outputFormats] : yuvConversions) {
-				/* check if the converter can produce pixelFormat */
-				auto it = std::find(outputFormats.begin(), outputFormats.end(), pixelFormat);
-				if (it == outputFormats.end())
-					continue;
-
+							if (status != CameraConfiguration::Invalid && cfg.pixelFormat == inputFormat) {
+								mappedFormat = inputFormat;
+								formatsMap_[androidFormat] = inputFormat;
+								conversionMap_[androidFormat] = std::make_pair(inputFormat, outputFormat);
+								formatMapped = true;
+								LOG(HAL, Debug) << "BLOB format: Will convert " << inputFormat
+										<< " to " << outputFormat << " for JPEG encoding";
+								break;
+							}
+						}
+					}
+					if (formatMapped)
+						break;
+				}
+			}
+		} else {
+			/* For non-BLOB formats, use the existing logic */
+			
+			/*
+			 * Test the libcamera formats that can produce images
+			 * compatible with the format defined by Android.
+			 */
+			for (const PixelFormat &pixelFormat : libcameraFormats) {
 				/*
-				 * The converter can produce output pixelFormat, see if we can configure
-				 * the camera with the associated input pixelFormat.
+				 * The stream configuration size can be adjusted.
+				 * The pixel format might be converted via libyuv.
+				 * Conversion check is done in another loop after
+				 * testing native supported formats.
+				 *
+				 * \todo This could be simplified once all pipeline
+				 * handlers will report the StreamFormats list of
+				 * supported formats.
 				 */
-				cfg.pixelFormat = inputFormat;
-				CameraConfiguration::Status status = cameraConfig->validate();
+				cfg.pixelFormat = pixelFormat;
 
-				if (status != CameraConfiguration::Invalid && cfg.pixelFormat == inputFormat) {
-					mappedFormat = inputFormat;
-					conversionMap_[androidFormat] = std::make_pair(inputFormat, *it);
-					needConversion = true;
+				CameraConfiguration::Status status = cameraConfig->validate();
+				if (status != CameraConfiguration::Invalid &&
+				    cfg.pixelFormat == pixelFormat) {
+					mappedFormat = pixelFormat;
 					break;
 				}
 			}
 
-			/* We found a valid conversion format, so bail out */
-			if (mappedFormat.isValid())
-				break;
+			if (!mappedFormat.isValid()) {
+				/* If the format is not mandatory, skip it. */
+				if (!camera3Format.mandatory)
+					continue;
+			}
+
+			/*
+			 * Test if we can map the format via a software conversion.
+			 * This means that the converter can produce an "output" that is
+			 * compatible with the format defined in Android.
+			 */
+			if (!mappedFormat.isValid()) {
+				for (const PixelFormat &pixelFormat : libcameraFormats) {
+					LOG(HAL, Debug) << "Trying " << pixelFormat << " using conversion";
+
+					/* \todo move this into a separate function */
+					for (const auto &[inputFormat, outputFormats] : yuvConversions) {
+						/* check if the converter can produce pixelFormat */
+						auto it = std::find(outputFormats.begin(), outputFormats.end(), pixelFormat);
+						if (it == outputFormats.end())
+							continue;
+
+						/*
+						 * The converter can produce output pixelFormat, see if we can configure
+						 * the camera with the associated input pixelFormat.
+						 */
+						cfg.pixelFormat = inputFormat;
+						CameraConfiguration::Status status = cameraConfig->validate();
+
+						if (status != CameraConfiguration::Invalid && cfg.pixelFormat == inputFormat) {
+							mappedFormat = inputFormat;
+							conversionMap_[androidFormat] = std::make_pair(inputFormat, *it);
+							break;
+						}
+					}
+					
+					/* We found a valid conversion format, so bail out */
+					if (mappedFormat.isValid())
+						break;
+				}
+			}
 		}
 
-		if (!mappedFormat.isValid()) {
+		if (!formatMapped && !mappedFormat.isValid()) {
 			LOG(HAL, Error)
 				<< "Failed to map mandatory Android format "
 				<< camera3Format.name << " ("
@@ -667,14 +707,11 @@ int CameraCapabilities::initializeStreamConfigurations()
 		 * Record the mapping and then proceed to generate the
 		 * stream configurations map, by testing the image resolutions.
 		 */
-		formatsMap_[androidFormat] = mappedFormat;
-		LOG(HAL, Debug) << "Mapped Android format "
-				<< camera3Format.name << " to "
-				<< mappedFormat;
-		if (needConversion) {
-			LOG(HAL, Debug) << mappedFormat
-					<< " will be converted into "
-					<< conversionMap_[androidFormat].second;
+		if (!formatMapped) {
+			formatsMap_[androidFormat] = mappedFormat;
+			LOG(HAL, Debug) << "Mapped Android format "
+					<< camera3Format.name << " to "
+					<< mappedFormat;
 		}
 
 		std::vector<Size> resolutions;
