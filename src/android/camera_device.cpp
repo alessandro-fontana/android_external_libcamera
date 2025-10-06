@@ -634,8 +634,12 @@ int CameraDevice::configureStreams(camera3_stream_configuration_t *stream_list)
 			continue;
 		}
 
+		CameraStream::Type type = CameraStream::Type::Direct;
+		if (capabilities_.needConversion(stream->format))
+			type = CameraStream::Type::Internal;
+
 		Camera3StreamConfig streamConfig;
-		streamConfig.streams = { { stream, CameraStream::Type::Direct } };
+		streamConfig.streams = { { stream, type } };
 		streamConfig.config.size = size;
 		streamConfig.config.pixelFormat = format;
 		streamConfigs.push_back(std::move(streamConfig));

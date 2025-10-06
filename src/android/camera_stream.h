@@ -128,9 +128,12 @@ public:
 
 	int configure();
 	int process(Camera3RequestDescriptor::StreamBuffer *streamBuffer);
+	libcamera::Size computeYUYVSize(const libcamera::Size &nv12Size);
 	libcamera::FrameBuffer *getBuffer();
 	void putBuffer(libcamera::FrameBuffer *buffer);
 	void flush();
+
+	bool needConversion() const { return needConversion_; }
 
 private:
 	class PostProcessorWorker : public libcamera::Thread
@@ -184,4 +187,6 @@ private:
 	std::unique_ptr<PostProcessor> postProcessor_;
 
 	std::unique_ptr<PostProcessorWorker> worker_;
+
+	bool needConversion_;
 };

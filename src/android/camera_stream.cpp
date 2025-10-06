@@ -95,6 +95,7 @@ int CameraStream::configure()
 
 		switch (outFormat) {
 		case formats::NV12:
+		case formats::YUYV:
 			postProcessor_ = std::make_unique<PostProcessorYuv>();
 			break;
 
@@ -105,6 +106,16 @@ int CameraStream::configure()
 		default:
 			LOG(HAL, Error) << "Unsupported format: " << outFormat;
 			return -EINVAL;
+		}
+
+		needConversion_ =
+			cameraDevice_->capabilities()->needConversion(camera3Stream_->format);
+
+		if (needConversion_) {
+			auto conv = cameraDevice_->capabilities()->conversionFormats(camera3Stream_->format);
+			LOG(HAL, Debug) << "Configuring the post processor to convert "
+					<< conv.first << " -> " << conv.second;
+			output.pixelFormat = conv.second;
 		}
 
 		int ret = postProcessor_->configure(input, output);
@@ -183,7 +194,12 @@ int CameraStream::process(Camera3RequestDescriptor::StreamBuffer *streamBuffer)
 		streamBuffer->fence.reset();
 	}
 
-	const StreamConfiguration &output = configuration();
+	StreamConfiguration output = configuration();
+	if (needConversion_) {
+		output.pixelFormat =
+			cameraDevice_->capabilities()->conversionFormats(camera3Stream_->format).second;
+	}
+
 	streamBuffer->dstBuffer = std::make_unique<CameraBuffer>(
 		*streamBuffer->camera3Buffer, output.pixelFormat, output.size,
 		PROT_READ | PROT_WRITE);
@@ -205,6 +221,39 @@ void CameraStream::flush()
 	worker_->flush();
 }
 
+Size CameraStream::computeYUYVSize(const Size &nv12Size)
+{
+	/*
+	 * On am62x platforms, the receiver driver (j721e-csi2rx) only
+	 * supports packed YUV422 formats such as YUYV, YVYU, UYVY and VYUY.
+	 *
+	 * However, the gralloc implementation is only capable of semiplanar
+	 * YUV420 such as NV12.
+	 *
+	 * To trick the kernel into believing it's receiving a YUYV buffer, we adjust the
+	 * size we request to gralloc so that plane(0) of the NV12 buffer is long enough to
+	 * match the length of a YUYV plane.
+	 *
+	 * for NV12, one pixel is encoded on 1.5 bytes, but plane 0 has 1 byte per pixel.
+	 * for YUYV, one pixel is encoded on 2 bytes.
+	 *
+	 * So apply a *2 factor.
+	 *
+	 * See:
+	 * https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/pixfmt-packed-yuv.html
+	 * https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/pixfmt-yuv-planar.html
+	 */
+	constexpr unsigned int YUYVfactor = 2;
+
+	unsigned int width = nv12Size.width;
+	unsigned int height = nv12Size.height;
+
+	if (needConversion_)
+		width = width * YUYVfactor;
+
+	return Size{ width, height };
+}
+
 FrameBuffer *CameraStream::getBuffer()
 {
 	if (!allocator_)
@@ -222,8 +271,9 @@ FrameBuffer *CameraStream::getBuffer()
 		 * \todo Store a reference to the format of the source stream
 		 * instead of hardcoding.
 		 */
+		const Size hackedSize = computeYUYVSize(configuration().size);
 		auto frameBuffer = allocator_->allocate(HAL_PIXEL_FORMAT_YCBCR_420_888,
-							configuration().size,
+							hackedSize,
 							camera3Stream_->usage);
 		allocatedBuffers_.push_back(std::move(frameBuffer));
 		buffers_.emplace_back(allocatedBuffers_.back().get());

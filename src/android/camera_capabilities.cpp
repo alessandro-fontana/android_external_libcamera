@@ -125,6 +125,16 @@ const std::map<int, const Camera3Format> camera3FormatsMap = {
 	},
 };
 
+/**
+ * \var yuvConversions
+ * \brief list of supported pixel formats for an input pixel format
+ *
+ * \todo This should be retrieved statically from yuv/post_processor_yuv instead
+ */
+const std::map<PixelFormat, const std::vector<PixelFormat>> yuvConversions = {
+	{ formats::YUYV, { formats::NV12 } },
+};
+
 const std::map<camera_metadata_enum_android_info_supported_hardware_level, std::string>
 hwLevelStrings = {
 	{ ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED,  "LIMITED" },
@@ -583,8 +593,10 @@ int CameraCapabilities::initializeStreamConfigurations()
 			LOG(HAL, Debug) << "Testing " << pixelFormat;
 
 			/*
-			 * The stream configuration size can be adjusted,
-			 * not the pixel format.
+			 * The stream configuration size can be adjusted.
+			 * The pixel format might be converted via libyuv.
+			 * Conversion check is done in another loop after
+			 * testing native supported formats.
 			 *
 			 * \todo This could be simplified once all pipeline
 			 * handlers will report the StreamFormats list of
@@ -604,7 +616,46 @@ int CameraCapabilities::initializeStreamConfigurations()
 			/* If the format is not mandatory, skip it. */
 			if (!camera3Format.mandatory)
 				continue;
+		}
 
+		/*
+		 * Test if we can map the format via a software conversion.
+		 * This means that the converter can produce an "output" that is
+		 * compatible with the format defined in Android.
+		 */
+		bool needConversion = false;
+		for (const PixelFormat &pixelFormat : libcameraFormats) {
+
+			LOG(HAL, Debug) << "Testing " << pixelFormat << " using conversion";
+
+			/* \todo move this into a separate function */
+			for (const auto &[inputFormat, outputFormats] : yuvConversions) {
+				/* check if the converter can produce pixelFormat */
+				auto it = std::find(outputFormats.begin(), outputFormats.end(), pixelFormat);
+				if (it == outputFormats.end())
+					continue;
+
+				/*
+				 * The converter can produce output pixelFormat, see if we can configure
+				 * the camera with the associated input pixelFormat.
+				 */
+				cfg.pixelFormat = inputFormat;
+				CameraConfiguration::Status status = cameraConfig->validate();
+
+				if (status != CameraConfiguration::Invalid && cfg.pixelFormat == inputFormat) {
+					mappedFormat = inputFormat;
+					conversionMap_[androidFormat] = std::make_pair(inputFormat, *it);
+					needConversion = true;
+					break;
+				}
+			}
+
+			/* We found a valid conversion format, so bail out */
+			if (mappedFormat.isValid())
+				break;
+		}
+
+		if (!mappedFormat.isValid()) {
 			LOG(HAL, Error)
 				<< "Failed to map mandatory Android format "
 				<< camera3Format.name << " ("
@@ -620,6 +671,11 @@ int CameraCapabilities::initializeStreamConfigurations()
 		LOG(HAL, Debug) << "Mapped Android format "
 				<< camera3Format.name << " to "
 				<< mappedFormat;
+		if (needConversion) {
+			LOG(HAL, Debug) << mappedFormat
+					<< " will be converted into "
+					<< conversionMap_[androidFormat].second;
+		}
 
 		std::vector<Size> resolutions;
 		const PixelFormatInfo &info = PixelFormatInfo::info(mappedFormat);
@@ -1490,6 +1546,36 @@ PixelFormat CameraCapabilities::toPixelFormat(int format) const
 		LOG(HAL, Error) << "Requested format " << utils::hex(format)
 				<< " not supported";
 		return PixelFormat();
+	}
+
+	return it->second;
+}
+
+/*
+ * Check if we need to do software conversion via a post-processor
+ * for an Android format code
+ */
+bool CameraCapabilities::needConversion(int format) const
+{
+	auto it = conversionMap_.find(format);
+	if (it == conversionMap_.end()) {
+		LOG(HAL, Error) << "Requested format " << utils::hex(format)
+				<< " not supported for conversion";
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * Returns a conversion (input,output) pair for a given Android format code
+ */
+std::pair<PixelFormat, PixelFormat> CameraCapabilities::conversionFormats(int format) const
+{
+	auto it = conversionMap_.find(format);
+	if (it == conversionMap_.end()) {
+		LOG(HAL, Error) << "Requested format " << utils::hex(format)
+				<< " not supported for conversion";
 	}
 
 	return it->second;

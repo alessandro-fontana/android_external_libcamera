@@ -30,6 +30,9 @@ public:
 
 	CameraMetadata *staticMetadata() const { return staticMetadata_.get(); }
 	libcamera::PixelFormat toPixelFormat(int format) const;
+	bool needConversion(int format) const;
+	std::pair<libcamera::PixelFormat, libcamera::PixelFormat>
+		conversionFormats(int format) const;
 	unsigned int maxJpegBufferSize() const { return maxJpegBufferSize_; }
 
 	std::unique_ptr<CameraMetadata> requestTemplateManual() const;
@@ -77,6 +80,7 @@ private:
 
 	std::vector<Camera3StreamConfiguration> streamConfigurations_;
 	std::map<int, libcamera::PixelFormat> formatsMap_;
+	std::map<int, std::pair<libcamera::PixelFormat, libcamera::PixelFormat>> conversionMap_;
 	std::unique_ptr<CameraMetadata> staticMetadata_;
 	unsigned int maxJpegBufferSize_;
 
