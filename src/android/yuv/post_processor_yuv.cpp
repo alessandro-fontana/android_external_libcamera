@@ -101,27 +101,27 @@ bool PostProcessorYuv::isValidBuffers(const FrameBuffer &source,
 		return false;
 	}
 
-	if (source.planes()[0].length < sourceLength_[0] ||
-	    source.planes()[1].length < sourceLength_[1]) {
-		LOG(YUV, Error)
-			<< "The source planes lengths are too small, actual size: {"
-			<< source.planes()[0].length << ", "
-			<< source.planes()[1].length
-			<< "}, expected size: {"
-			<< sourceLength_[0] << ", "
-			<< sourceLength_[1] << "}";
-		return false;
+	for (unsigned int i = 0; i < 2; i++) {
+		if (source.planes()[i].length < sourceLength_[i]) {
+			LOG(YUV, Error)
+				<< "The source planes lengths are too small, "
+				<< "actual size[" << i << "]="
+				<< source.planes()[i].length
+				<< ", expected size[" << i << "]="
+				<< sourceLength_[i];
+			return false;
+		}
 	}
-	if (destination.plane(0).size() < destinationLength_[0] ||
-	    destination.plane(1).size() < destinationLength_[1]) {
-		LOG(YUV, Error)
-			<< "The destination planes lengths are too small, actual size: {"
-			<< destination.plane(0).size() << ", "
-			<< destination.plane(1).size()
-			<< "}, expected size: {"
-			<< sourceLength_[0] << ", "
-			<< sourceLength_[1] << "}";
-		return false;
+	for (unsigned int i = 0; i < 2; i++) {
+		if (destination.plane(i).size() < destinationLength_[i]) {
+			LOG(YUV, Error)
+				<< "The destination planes lengths are too small, "
+				<< "actual size[" << i << "]="
+				<< destination.plane(i).size()
+				<< ", expected size[" << i << "]="
+				<< sourceLength_[i];
+			return false;
+		}
 	}
 
 	return true;
