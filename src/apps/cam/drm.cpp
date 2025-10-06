@@ -22,7 +22,11 @@
 #include <libcamera/geometry.h>
 #include <libcamera/pixel_format.h>
 
+#if defined(__ANDROID__)
+#include <drm/drm_mode.h>
+#else
 #include <libdrm/drm_mode.h>
+#endif
 
 #include "../common/event_loop.h"
 

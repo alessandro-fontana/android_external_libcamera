@@ -18,7 +18,11 @@
 #include <libcamera/base/signal.h>
 #include <libcamera/base/span.h>
 
+#if defined(__ANDROID__)
+#include <drm/drm.h>
+#else
 #include <libdrm/drm.h>
+#endif
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
