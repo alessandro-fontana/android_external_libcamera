@@ -28,8 +28,12 @@ private:
 
 	libcamera::Size sourceSize_;
 	libcamera::Size destinationSize_;
-	unsigned int sourceLength_[2] = {};
-	unsigned int destinationLength_[2] = {};
-	unsigned int sourceStride_[2] = {};
-	unsigned int destinationStride_[2] = {};
+	libcamera::PixelFormat sourceFormat_;
+	libcamera::PixelFormat destinationFormat_;
+	unsigned int sourceLength_[3] = {};
+	unsigned int destinationLength_[3] = {};
+	unsigned int sourceStride_[3] = {};
+	unsigned int destinationStride_[3] = {};
+	unsigned int sourceNumPlanes_;
+	unsigned int destinationNumPlanes_;
 };

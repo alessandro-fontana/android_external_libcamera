@@ -90,18 +90,18 @@ void PostProcessorYuv::process(Camera3RequestDescriptor::StreamBuffer *streamBuf
 bool PostProcessorYuv::isValidBuffers(const FrameBuffer &source,
 				      const CameraBuffer &destination) const
 {
-	if (source.planes().size() != 2) {
+	if (source.planes().size() != sourceNumPlanes_) {
 		LOG(YUV, Error) << "Invalid number of source planes: "
 				<< source.planes().size();
 		return false;
 	}
-	if (destination.numPlanes() != 2) {
+	if (destination.numPlanes() != destinationNumPlanes_) {
 		LOG(YUV, Error) << "Invalid number of destination planes: "
 				<< destination.numPlanes();
 		return false;
 	}
 
-	for (unsigned int i = 0; i < 2; i++) {
+	for (unsigned int i = 0; i < sourceNumPlanes_; i++) {
 		if (source.planes()[i].length < sourceLength_[i]) {
 			LOG(YUV, Error)
 				<< "The source planes lengths are too small, "
@@ -112,7 +112,7 @@ bool PostProcessorYuv::isValidBuffers(const FrameBuffer &source,
 			return false;
 		}
 	}
-	for (unsigned int i = 0; i < 2; i++) {
+	for (unsigned int i = 0; i < destinationNumPlanes_; i++) {
 		if (destination.plane(i).size() < destinationLength_[i]) {
 			LOG(YUV, Error)
 				<< "The destination planes lengths are too small, "
@@ -132,15 +132,23 @@ void PostProcessorYuv::calculateLengths(const StreamConfiguration &inCfg,
 {
 	sourceSize_ = inCfg.size;
 	destinationSize_ = outCfg.size;
+	sourceFormat_ = inCfg.pixelFormat;
+	destinationFormat_ = outCfg.pixelFormat;
 
-	const PixelFormatInfo &nv12Info = PixelFormatInfo::info(formats::NV12);
-	for (unsigned int i = 0; i < 2; i++) {
+	// const PixelFormatInfo &nv12Info = PixelFormatInfo::info(formats::NV12);
+	const PixelFormatInfo &sourceInfo = PixelFormatInfo::info(sourceFormat_);
+	sourceNumPlanes_ = sourceInfo.numPlanes();
+	for (unsigned int i = 0; i < sourceInfo.numPlanes(); i++) {
 		sourceStride_[i] = inCfg.stride;
-		destinationStride_[i] = nv12Info.stride(destinationSize_.width, i, 1);
+		sourceLength_[i] = sourceInfo.planeSize(sourceSize_.height, i,
+							sourceStride_[i]);
+	}
 
-		sourceLength_[i] = nv12Info.planeSize(sourceSize_.height, i,
-						      sourceStride_[i]);
-		destinationLength_[i] = nv12Info.planeSize(destinationSize_.height, i,
-							   destinationStride_[i]);
+	const PixelFormatInfo &destinationInfo = PixelFormatInfo::info(destinationFormat_);
+	destinationNumPlanes_ = destinationInfo.numPlanes();
+	for (unsigned int i = 0; i < destinationInfo.numPlanes(); i++) {
+		destinationStride_[i] = destinationInfo.stride(destinationSize_.width, i, 1);
+		destinationLength_[i] = destinationInfo.planeSize(destinationSize_.height, i,
+								  destinationStride_[i]);
 	}
 }
