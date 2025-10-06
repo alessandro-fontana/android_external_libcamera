@@ -25,16 +25,20 @@ namespace {
 
 /* uClibc doesn't provide the file sealing API. */
 #if not HAVE_FILE_SEALS
+#ifndef __ANDROID__
 #define F_ADD_SEALS		1033
+#endif
 #define F_SEAL_SHRINK		0x0002
 #define F_SEAL_GROW		0x0004
 #endif
 
+#ifndef __ANDROID__
 #if not HAVE_MEMFD_CREATE
 int memfd_create(const char *name, unsigned int flags)
 {
 	return syscall(SYS_memfd_create, name, flags);
 }
+#endif
 #endif
 
 } /* namespace */
