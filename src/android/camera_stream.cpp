@@ -87,6 +87,7 @@ int CameraStream::configure()
 	if (type_ == Type::Internal || type_ == Type::Mapped) {
 		const PixelFormat outFormat =
 			cameraDevice_->capabilities()->toPixelFormat(camera3Stream_->format);
+		StreamConfiguration input = configuration();
 		StreamConfiguration output = configuration();
 		output.pixelFormat = outFormat;
 		output.size.width = camera3Stream_->width;
@@ -106,7 +107,7 @@ int CameraStream::configure()
 			return -EINVAL;
 		}
 
-		int ret = postProcessor_->configure(configuration(), output);
+		int ret = postProcessor_->configure(input, output);
 		if (ret)
 			return ret;
 
