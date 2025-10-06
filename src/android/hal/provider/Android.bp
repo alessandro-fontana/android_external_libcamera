@@ -35,6 +35,7 @@ cc_library_shared {
     proprietary: true,
     srcs: ["LibcameraProvider.cpp"],
     export_include_dirs: ["."],
+    installable: false,
 }
 
 cc_defaults {
@@ -45,11 +46,42 @@ cc_defaults {
     srcs: ["service.cpp"],
     shared_libs: [
         "android.hardware.camera.provider-V1-libcamera-impl",
+        "camera.libcamera",
     ],
 }
 
 cc_binary {
     name: "android.hardware.camera.provider-V1-libcamera-service",
     defaults: ["camera_service.libcamera_defaults"],
-    init_rc: ["android.hardware.camera.provider-V1-libcamera-service.rc"],
+    installable: false,
+}
+
+prebuilt_etc {
+    name: "android.hardware.camera.libcamera.xml",
+    src: "provider-libcamera.xml",
+    sub_dir: "vintf",
+    installable: false,
+}
+
+prebuilt_etc {
+    name: "android.hardware.camera.libcamera.rc",
+    src: "provider-libcamera.rc",
+    installable: false,
+}
+
+apex {
+    name: "com.android.hardware.camera.libcamera",
+    manifest: "apex_manifest.json",
+    file_contexts: "apex_file_contexts",
+    key: "com.android.hardware.key",
+    certificate: ":com.android.hardware.certificate",
+    updatable: false,
+    vendor: true,
+    binaries: [
+        "android.hardware.camera.provider-V1-libcamera-service",
+    ],
+    prebuilts: [
+        "android.hardware.camera.libcamera.xml",
+        "android.hardware.camera.libcamera.rc",
+    ],
 }
