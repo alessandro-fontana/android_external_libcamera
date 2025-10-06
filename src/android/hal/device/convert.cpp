@@ -20,6 +20,7 @@
 #include "convert.h"
 
 #include <aidl/android/hardware/graphics/common/BufferUsage.h>
+#include <aidl/android/hardware/graphics/common/Dataspace.h>
 #include <aidl/android/hardware/graphics/common/PixelFormat.h>
 #include <hardware/camera_common.h>
 
@@ -108,6 +109,14 @@ void convertToAidl(const Camera3Stream* src, HalStream* dst) {
     dst->id = src->mId;
     dst->overrideFormat = (PixelFormat) src->format;
     dst->maxBuffers = src->max_buffers;
+    // For BLOB streams, ensure overrideDataSpace matches the forced JFIF dataspace
+    // For YUV 4:2:0 format, use JFIF dataspace to match framework expectation
+    if (src->format == HAL_PIXEL_FORMAT_BLOB || src->format == HAL_PIXEL_FORMAT_YCBCR_420_888) {
+        dst->overrideDataSpace = ::aidl::android::hardware::graphics::common::Dataspace::JFIF;
+    } else {
+        dst->overrideDataSpace = static_cast<::aidl::android::hardware::graphics::common::Dataspace>(src->data_space);
+    }
+
     if (src->stream_type == CAMERA3_STREAM_OUTPUT) {
         dst->consumerUsage = (BufferUsage)0;
         dst->producerUsage = (BufferUsage)src->usage;
