@@ -16,8 +16,8 @@
 #include "libcamera/internal/framebuffer.h"
 
 #include <hardware/camera3.h>
-#include <hardware/gralloc.h>
-#include <hardware/hardware.h>
+#include <ui/GraphicBufferAllocator.h>
+#include <utils/Errors.h>
 
 #include "../camera_device.h"
 #include "../frame_buffer_allocator.h"
@@ -33,13 +33,12 @@ class GenericFrameBufferData : public FrameBuffer::Private
 	LIBCAMERA_DECLARE_PUBLIC(FrameBuffer)
 
 public:
-	GenericFrameBufferData(struct alloc_device_t *allocDevice,
+	GenericFrameBufferData(android::GraphicBufferAllocator &allocDevice,
 			       buffer_handle_t handle,
 			       const std::vector<FrameBuffer::Plane> &planes)
 		: FrameBuffer::Private(planes), allocDevice_(allocDevice),
 		  handle_(handle)
 	{
-		ASSERT(allocDevice_);
 		ASSERT(handle_);
 	}
 
@@ -57,11 +56,13 @@ public:
 		 * \todo Thread safety against alloc_device_t is not documented.
 		 * Is it no problem to call alloc/free in parallel?
 		 */
-		allocDevice_->free(allocDevice_, handle_);
+		android::status_t status = allocDevice_.free(handle_);
+		if (status != android::NO_ERROR)
+			LOG(HAL, Error) << "Error freeing framebuffer: " << status;
 	}
 
 private:
-	struct alloc_device_t *allocDevice_;
+	android::GraphicBufferAllocator &allocDevice_;
 	const buffer_handle_t handle_;
 };
 } /* namespace */
@@ -74,10 +75,8 @@ public:
 	Private(CameraDevice *const cameraDevice)
 		: cameraDevice_(cameraDevice),
 		  hardwareModule_(nullptr),
-		  allocDevice_(nullptr)
+		  allocDevice_(android::GraphicBufferAllocator::get())
 	{
-		hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &hardwareModule_);
-		ASSERT(hardwareModule_);
 	}
 
 	~Private() override;
@@ -88,14 +87,11 @@ public:
 private:
 	const CameraDevice *const cameraDevice_;
 	const struct hw_module_t *hardwareModule_;
-	struct alloc_device_t *allocDevice_;
+	android::GraphicBufferAllocator &allocDevice_;
 };
 
 PlatformFrameBufferAllocator::Private::~Private()
 {
-	if (allocDevice_)
-		gralloc_close(allocDevice_);
-	dlclose(hardwareModule_->dso);
 }
 
 std::unique_ptr<HALFrameBuffer>
@@ -103,20 +99,14 @@ PlatformFrameBufferAllocator::Private::allocate(int halPixelFormat,
 						const libcamera::Size &size,
 						uint32_t usage)
 {
-	if (!allocDevice_) {
-		int ret = gralloc_open(hardwareModule_, &allocDevice_);
-		if (ret) {
-			LOG(HAL, Fatal) << "gralloc_open() failed: " << ret;
-			return nullptr;
-		}
-	}
-
-	int stride = 0;
+	uint32_t stride = 0;
 	buffer_handle_t handle = nullptr;
-	int ret = allocDevice_->alloc(allocDevice_, size.width, size.height,
-				      halPixelFormat, usage, &handle, &stride);
-	if (ret) {
-		LOG(HAL, Error) << "failed buffer allocation: " << ret;
+
+	android::status_t status = allocDevice_.allocate(size.width, size.height, halPixelFormat,
+							 1 /*layerCount*/, usage, &handle, &stride,
+							 "libcameraHAL");
+	if (status != android::NO_ERROR) {
+		LOG(HAL, Error) << "failed buffer allocation: " << status;
 		return nullptr;
 	}
 	if (!handle) {
