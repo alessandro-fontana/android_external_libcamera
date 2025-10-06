@@ -723,7 +723,8 @@ int CameraDevice::configureStreams(camera3_stream_configuration_t *stream_list)
 			 * be used when constructing the subsequent mapped
 			 * streams.
 			 */
-			if (stream.type == CameraStream::Type::Direct)
+			if (stream.type == CameraStream::Type::Direct ||
+			    stream.type == CameraStream::Type::Internal)
 				sourceStream = &streams_.back();
 		}
 	}
