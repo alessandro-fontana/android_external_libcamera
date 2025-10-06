@@ -7,6 +7,9 @@
 
 #include "post_processor_yuv.h"
 
+#include <utility>
+
+#include <libyuv/convert.h>
 #include <libyuv/scale.h>
 
 #include <libcamera/base/log.h>
@@ -22,26 +25,48 @@ using namespace libcamera;
 
 LOG_DEFINE_CATEGORY(YUV)
 
+namespace {
+
+/**
+ * \var supportedConversions
+ * \brief list of supported output pixel formats for an input pixel format
+ */
+const std::map<PixelFormat, const std::vector<PixelFormat>> supportedConversions = {
+	{ formats::YUYV, { formats::NV12 } },
+};
+
+} /* namespace */
+
 int PostProcessorYuv::configure(const StreamConfiguration &inCfg,
 				const StreamConfiguration &outCfg)
 {
 	if (inCfg.pixelFormat != outCfg.pixelFormat) {
-		LOG(YUV, Error) << "Pixel format conversion is not supported"
-				<< " (from " << inCfg.pixelFormat
-				<< " to " << outCfg.pixelFormat << ")";
-		return -EINVAL;
+		const auto it = supportedConversions.find(inCfg.pixelFormat);
+		if (it == supportedConversions.end()) {
+			LOG(YUV, Error) << "Unsupported source format " << inCfg.pixelFormat;
+			return -EINVAL;
+		}
+
+		std::vector<PixelFormat> outFormats = it->second;
+		const auto &match = std::find(outFormats.begin(), outFormats.end(), outCfg.pixelFormat);
+		if (match == outFormats.end()) {
+			LOG(YUV, Error) << "Requested pixel format conversion is not supported"
+					<< " (from " << inCfg.pixelFormat
+					<< " to " << outCfg.pixelFormat << ")";
+			return -EINVAL;
+		}
+	} else {
+		if (inCfg.pixelFormat != formats::NV12) {
+			LOG(YUV, Error) << "Unsupported format " << inCfg.pixelFormat
+					<< " (only NV12 is supported for scaling)";
+			return -EINVAL;
+		}
 	}
 
 	if (inCfg.size < outCfg.size) {
 		LOG(YUV, Error) << "Up-scaling is not supported"
 				<< " (from " << inCfg.size
 				<< " to " << outCfg.size << ")";
-		return -EINVAL;
-	}
-
-	if (inCfg.pixelFormat != formats::NV12) {
-		LOG(YUV, Error) << "Unsupported format " << inCfg.pixelFormat
-				<< " (only NV12 is supported)";
 		return -EINVAL;
 	}
 
@@ -66,20 +91,40 @@ void PostProcessorYuv::process(Camera3RequestDescriptor::StreamBuffer *streamBuf
 		return;
 	}
 
-	int ret = libyuv::NV12Scale(sourceMapped.planes()[0].data(),
-				    sourceStride_[0],
-				    sourceMapped.planes()[1].data(),
-				    sourceStride_[1],
-				    sourceSize_.width, sourceSize_.height,
-				    destination->plane(0).data(),
-				    destinationStride_[0],
-				    destination->plane(1).data(),
-				    destinationStride_[1],
-				    destinationSize_.width,
-				    destinationSize_.height,
-				    libyuv::FilterMode::kFilterBilinear);
+	int ret = 0;
+	switch (sourceFormat_) {
+	case formats::NV12:
+		ret = libyuv::NV12Scale(sourceMapped.planes()[0].data(),
+					sourceStride_[0],
+					sourceMapped.planes()[1].data(),
+					sourceStride_[1],
+					sourceSize_.width, sourceSize_.height,
+					destination->plane(0).data(),
+					destinationStride_[0],
+					destination->plane(1).data(),
+					destinationStride_[1],
+					destinationSize_.width,
+					destinationSize_.height,
+					libyuv::FilterMode::kFilterBilinear);
+		break;
+	case formats::YUYV:
+		ret = libyuv::YUY2ToNV12(sourceMapped.planes()[0].data(),
+					 sourceStride_[0],
+					 destination->plane(0).data(),
+					 destinationStride_[0],
+					 destination->plane(1).data(),
+					 destinationStride_[1],
+					 destinationSize_.width,
+					 destinationSize_.height);
+		break;
+	default:
+		LOG(YUV, Error) << "Unsupported source format " << sourceFormat_;
+		processComplete.emit(streamBuffer, PostProcessor::Status::Error);
+		break;
+	}
+
 	if (ret) {
-		LOG(YUV, Error) << "Failed NV12 scaling: " << ret;
+		LOG(YUV, Error) << "Libyuv operation failure: " << ret;
 		processComplete.emit(streamBuffer, PostProcessor::Status::Error);
 		return;
 	}
