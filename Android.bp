@@ -1,0 +1,69 @@
+//
+// Copyright (C) 2020 Baylibre Inc.
+//
+
+cc_library_headers {
+    name: "libcamera_includes",
+    vendor_available: true,
+    export_include_dirs: [
+        "include",
+    ],
+}
+
+cc_defaults {
+    name: "libcamera_default_flags",
+    rtti: true,
+    cflags: [
+        "-g3",
+        "-Werror",
+        "-Wshadow",
+        "-Wno-c99-designator",
+        "-D_FORTIFY_SOURCE=2",
+    ],
+    cpp_std: "c++17",
+    cppflags: [
+        "-g3",
+        "-Werror",
+        "-DHAVE_LOCALE_T",
+        "-Wshadow",
+        "-Wno-c99-designator",
+        "-D_FORTIFY_SOURCE=2",
+        "-Wextra-semi",
+        "-Wno-implicit-fallthrough",
+        /* Real path will be set via environment variables at runtime */
+        "-DIPA_MODULE_DIR=\"/vendor/lib64/libcamera\"",
+        "-DIPA_CONFIG_DIR=\"/vendor/etc/libcamera/ipa/:/vendor/share/libcamera/ipa\"",
+        "-DIPA_PROXY_DIR=\"/vendor/bin/libcamera\"",
+        "-DLIBCAMERA_SYSCONF_DIR=\"/vendor/etc/libcamera/\"",
+        "-DLIBCAMERA_DATA_DIR=\"/data/vendor/hardware/libcamera/\"",
+        "-DLIBCAMERA_BASE_PRIVATE",
+    ],
+}
+
+cc_library_shared {
+    name: "libcamera",
+    vendor: true,
+    defaults: [
+        "libcamera_default_flags",
+    ],
+    srcs: [
+        "src/libcamera/*.cpp",
+        "src/libcamera/mm/*.cpp",
+        "src/libcamera/base/*.cpp",
+        "src/libcamera/converter/*.cpp",
+        "src/libcamera/sensor/*.cpp",
+        "src/libcamera/software_isp/*.cpp",
+        "src/libcamera/proxy/*.cpp",
+        "src/libcamera/pipeline/simple/*.cpp",
+    ],
+    exclude_srcs: [
+        "src/libcamera/device_enumerator_udev.cpp",
+    ],
+    header_libs: [
+        "libcamera_includes",
+    ],
+    shared_libs: [
+        "libdl",
+        "libyaml"
+    ],
+}

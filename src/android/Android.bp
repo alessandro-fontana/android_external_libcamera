@@ -1,0 +1,51 @@
+//
+// Copyright (C) 2020 Baylibre Inc.
+//
+
+cc_library_shared {
+    name: "camera.libcamera",
+    vendor: true,
+    relative_install_path: "hw",
+    defaults: [
+        "libcamera_default_flags",
+    ],
+    cflags: [
+        "-Wno-shadow",
+    ],
+    cppflags: [
+        "-Wno-extra-semi",
+    ],
+    srcs: [
+        "*.cpp",
+        "mm/generic_camera_buffer.cpp",
+        "mm/generic_frame_buffer_allocator.cpp",
+        "jpeg/*.cpp",
+        "yuv/*.cpp",
+    ],
+
+    exclude_srcs: [
+        "jpeg/encoder_jea.cpp",
+        "jpeg/encoder_jea.h",
+    ],
+
+    header_libs: [
+        "libcamera_includes",
+        "libhardware_headers",
+    ],
+
+    shared_libs: [
+        "libcamera_metadata",
+        "libcutils",
+        "liblog",
+        "libsync",
+        "libutils",
+        "libc",
+        "libexif",
+        "libjpeg",
+        "libcamera",
+        "libyaml",
+        "libyuv_chromium",
+        "libdl",
+        "libui",
+    ],
+}
