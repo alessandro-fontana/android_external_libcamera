@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "../post_processor.h"
 
 #include <libcamera/geometry.h>
@@ -30,6 +32,7 @@ private:
 	libcamera::Size destinationSize_;
 	libcamera::PixelFormat sourceFormat_;
 	libcamera::PixelFormat destinationFormat_;
+	std::vector<uint8_t> scaled_;
 	unsigned int sourceLength_[3] = {};
 	unsigned int destinationLength_[3] = {};
 	unsigned int sourceStride_[3] = {};

@@ -15,6 +15,8 @@
 
 #include <libcamera/formats.h>
 
+#include "libcamera/internal/formats.h"
+
 #include "jpeg/post_processor_jpeg.h"
 #include "yuv/post_processor_yuv.h"
 
@@ -70,6 +72,7 @@ CameraStream::~CameraStream()
 	 */
 	allocatedBuffers_.clear();
 	allocator_.reset();
+	dmaAllocator_.reset();
 }
 
 const StreamConfiguration &CameraStream::configuration() const
@@ -96,6 +99,7 @@ int CameraStream::configure()
 		switch (outFormat) {
 		case formats::NV12:
 		case formats::YUYV:
+		case formats::XRGB8888:
 			postProcessor_ = std::make_unique<PostProcessorYuv>();
 			break;
 
@@ -200,6 +204,17 @@ int CameraStream::process(Camera3RequestDescriptor::StreamBuffer *streamBuffer)
 			cameraDevice_->capabilities()->conversionFormats(camera3Stream_->format).second;
 	}
 
+	/*
+	 * A BLOB buffer is sized for the largest JPEG, not for the source
+	 * frame: describe it as NV12, which fits, rather than as the RGB
+	 * source, which does not.
+	 */
+	if (camera3Stream_->format == HAL_PIXEL_FORMAT_BLOB)
+		output.pixelFormat = formats::NV12;
+
+	/* A derived stream may be smaller than its source (see CameraDevice). */
+	output.size = Size(camera3Stream_->width, camera3Stream_->height);
+
 	streamBuffer->dstBuffer = std::make_unique<CameraBuffer>(
 		*streamBuffer->camera3Buffer, output.pixelFormat, output.size,
 		PROT_READ | PROT_WRITE);
@@ -243,13 +258,22 @@ Size CameraStream::computeYUYVSize(const Size &nv12Size)
 	 * https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/pixfmt-packed-yuv.html
 	 * https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/pixfmt-yuv-planar.html
 	 */
-	constexpr unsigned int YUYVfactor = 2;
-
 	unsigned int width = nv12Size.width;
 	unsigned int height = nv12Size.height;
 
-	if (needConversion_)
-		width = width * YUYVfactor;
+	/*
+	 * Plane 0 of the NV12 buffer must hold a whole frame of whatever
+	 * the pipeline writes into it: 2 bytes per pixel for YUYV, 4 for the
+	 * XRGB8888 output of the software ISP.
+	 */
+	const PixelFormat &format = configuration().pixelFormat;
+	if (format != formats::NV12) {
+		const PixelFormatInfo &info = PixelFormatInfo::info(format);
+		unsigned int factor = info.isValid() && info.pixelsPerGroup
+				    ? (info.planes[0].bytesPerGroup + info.pixelsPerGroup - 1) / info.pixelsPerGroup
+				    : 2;
+		width = width * factor;
+	}
 
 	return Size{ width, height };
 }
@@ -271,10 +295,40 @@ FrameBuffer *CameraStream::getBuffer()
 		 * \todo Store a reference to the format of the source stream
 		 * instead of hardcoding.
 		 */
-		const Size hackedSize = computeYUYVSize(configuration().size);
-		auto frameBuffer = allocator_->allocate(HAL_PIXEL_FORMAT_YCBCR_420_888,
-							hackedSize,
-							camera3Stream_->usage);
+		const StreamConfiguration &cfg = configuration();
+		std::unique_ptr<FrameBuffer> frameBuffer;
+
+		/*
+		 * The RGB output of the software ISP is written and read by the
+		 * CPU only, and a gralloc buffer is an uncached mapping, too
+		 * slow for the conversion to NV12. Take it from a cached dma-buf
+		 * heap instead, as a single plane.
+		 */
+		if (cfg.pixelFormat == formats::XRGB8888) {
+			if (!dmaAllocator_)
+				dmaAllocator_ = std::make_unique<DmaBufAllocator>(
+					DmaBufAllocator::DmaBufAllocatorFlag::SystemHeap |
+					DmaBufAllocator::DmaBufAllocatorFlag::UDmaBuf);
+			const size_t length = static_cast<size_t>(cfg.stride) * cfg.size.height;
+			UniqueFD fd;
+			if (dmaAllocator_->isValid())
+				fd = dmaAllocator_->alloc("libcamera-hal", length);
+			if (fd.isValid()) {
+				FrameBuffer::Plane plane;
+				plane.fd = SharedFD(std::move(fd));
+				plane.offset = 0;
+				plane.length = length;
+				frameBuffer = std::make_unique<HALFrameBuffer>(
+					std::vector<FrameBuffer::Plane>{ plane }, nullptr);
+			}
+		}
+
+		if (!frameBuffer) {
+			const Size hackedSize = computeYUYVSize(cfg.size);
+			frameBuffer = allocator_->allocate(HAL_PIXEL_FORMAT_YCBCR_420_888,
+							   hackedSize,
+							   camera3Stream_->usage);
+		}
 		allocatedBuffers_.push_back(std::move(frameBuffer));
 		buffers_.emplace_back(allocatedBuffers_.back().get());
 	}

@@ -43,6 +43,7 @@ const std::map<PixelFormat, JPEGPixelFormatInfo> pixelInfo{
 
 	{ formats::RGB888, { JCS_EXT_BGR, PixelFormatInfo::info(formats::RGB888), false } },
 	{ formats::BGR888, { JCS_EXT_RGB, PixelFormatInfo::info(formats::BGR888), false } },
+	{ formats::XRGB8888, { JCS_EXT_BGRX, PixelFormatInfo::info(formats::XRGB8888), false } },
 
 	{ formats::NV12, { JCS_YCbCr, PixelFormatInfo::info(formats::NV12), false } },
 	{ formats::NV21, { JCS_YCbCr, PixelFormatInfo::info(formats::NV21), true } },
@@ -93,7 +94,12 @@ int EncoderLibJpeg::configure(const StreamConfiguration &cfg)
 	compress_.image_height = cfg.size.height;
 	compress_.in_color_space = info.colorSpace;
 
-	compress_.input_components = info.colorSpace == JCS_GRAYSCALE ? 1 : 3;
+	if (info.colorSpace == JCS_GRAYSCALE)
+		compress_.input_components = 1;
+	else if (info.colorSpace == JCS_EXT_BGRX)
+		compress_.input_components = 4;
+	else
+		compress_.input_components = 3;
 
 	jpeg_set_defaults(&compress_);
 

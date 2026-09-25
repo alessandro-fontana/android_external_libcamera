@@ -26,6 +26,7 @@ public:
 
 private:
 	libcamera::PixelFormat pixelFormat_;
+	libcamera::PixelFormat sourceFormat_;
 	libcamera::Size sourceSize_;
 
 	bool valid_;

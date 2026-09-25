@@ -13,6 +13,9 @@
 
 #include "libcamera/internal/mapped_framebuffer.h"
 
+#include <libyuv/convert_from_argb.h>
+#include <libyuv/scale_argb.h>
+
 using namespace libcamera;
 
 LOG_DEFINE_CATEGORY(Thumbnailer)
@@ -26,6 +29,11 @@ void Thumbnailer::configure(const Size &sourceSize, PixelFormat pixelFormat)
 {
 	sourceSize_ = sourceSize;
 	pixelFormat_ = pixelFormat;
+	sourceFormat_ = pixelFormat;
+
+	/* An RGB source (software ISP) is scaled and converted to NV12. */
+	if (pixelFormat_ == formats::XRGB8888)
+		pixelFormat_ = formats::NV12;
 
 	if (pixelFormat_ != formats::NV12) {
 		LOG(Thumbnailer, Error)
@@ -58,6 +66,19 @@ void Thumbnailer::createThumbnail(const FrameBuffer &source,
 	const unsigned int sh = sourceSize_.height;
 	const unsigned int tw = targetSize.width;
 	const unsigned int th = targetSize.height;
+
+	if (sourceFormat_ == formats::XRGB8888) {
+		std::vector<unsigned char> scaled(tw * th * 4);
+
+		destination->resize(tw * th + (th / 2) * tw);
+		libyuv::ARGBScale(frame.planes()[0].data(), sw * 4, sw, sh,
+				  scaled.data(), tw * 4, tw, th,
+				  libyuv::kFilterBilinear);
+		libyuv::ARGBToNV12(scaled.data(), tw * 4,
+				   destination->data(), tw,
+				   destination->data() + tw * th, tw, tw, th);
+		return;
+	}
 
 	ASSERT(frame.planes().size() == 2);
 	ASSERT(tw % 2 == 0 && th % 2 == 0);

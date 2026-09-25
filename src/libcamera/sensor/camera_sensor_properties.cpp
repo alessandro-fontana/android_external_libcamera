@@ -162,6 +162,30 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
 			},
 			.sensorDelays = { },
 		} },
+		/*
+		 * Unit cell sizes from the vendors' product briefs. The S5K4H5YC
+		 * delays are the SMIA defaults, the SR259 ones were measured.
+		 */
+		{ "s5k4h5yc", {
+			.unitCellSize = { 1120, 1120 },
+			.testPatternModes = {},
+			.sensorDelays = {
+				.exposureDelay = 2,
+				.gainDelay = 1,
+				.vblankDelay = 2,
+				.hblankDelay = 2
+			},
+		} },
+		{ "sr259", {
+			.unitCellSize = { 1750, 1750 },
+			.testPatternModes = {},
+			.sensorDelays = {
+				.exposureDelay = 2,
+				.gainDelay = 2,
+				.vblankDelay = 2,
+				.hblankDelay = 2
+			},
+		} },
 		{ "imx219", {
 			.unitCellSize = { 1120, 1120 },
 			.testPatternModes = {

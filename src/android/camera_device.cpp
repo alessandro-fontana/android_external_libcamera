@@ -7,6 +7,8 @@
 
 #include "camera_device.h"
 
+#include <libcamera/orientation.h>
+
 #include <algorithm>
 #include <fstream>
 #include <set>
@@ -645,6 +647,39 @@ int CameraDevice::configureStreams(camera3_stream_configuration_t *stream_list)
 		streamConfigs.push_back(std::move(streamConfig));
 	}
 
+	/*
+	 * A camera that needs a conversion to produce YUV is a software ISP
+	 * with a single output: derive every other YUV stream from the
+	 * largest one, cropped and scaled by the YUV post-processor, instead
+	 * of asking the pipeline for streams it cannot produce.
+	 */
+	if (streamConfigs.size() > 1 &&
+	    capabilities_.needConversion(HAL_PIXEL_FORMAT_YCbCr_420_888)) {
+		auto largest = std::max_element(
+			streamConfigs.begin(), streamConfigs.end(),
+			[](const Camera3StreamConfig &a, const Camera3StreamConfig &b) {
+				return a.config.size.width * a.config.size.height <
+				       b.config.size.width * b.config.size.height;
+			});
+		Camera3StreamConfig source = std::move(*largest);
+		streamConfigs.erase(largest);
+
+		for (Camera3StreamConfig &other : streamConfigs) {
+			for (auto &stream : other.streams) {
+				source.streams[0].stream->usage |= GRALLOC_USAGE_SW_READ_OFTEN;
+				stream.stream->usage |= GRALLOC_USAGE_SW_WRITE_OFTEN;
+				source.streams.push_back({ stream.stream,
+							   CameraStream::Type::Mapped });
+				LOG(HAL, Info) << "Stream " << stream.stream->width
+					       << "x" << stream.stream->height
+					       << " derived from " << source.config.size;
+			}
+		}
+
+		streamConfigs.clear();
+		streamConfigs.push_back(std::move(source));
+	}
+
 	/* Now handle the MJPEG streams, adding a new stream if required. */
 	if (jpegStream) {
 		CameraStream::Type type;
@@ -692,7 +727,15 @@ int CameraDevice::configureStreams(camera3_stream_configuration_t *stream_list)
 			Camera3StreamConfig streamConfig;
 			streamConfig.config.size.width = jpegStream->width;
 			streamConfig.config.size.height = jpegStream->height;
+			/*
+			 * NV12 unless the camera needs a conversion to produce
+			 * YUV: then the source of that conversion, which the
+			 * JPEG encoder may read directly.
+			 */
 			streamConfig.config.pixelFormat = formats::NV12;
+			if (capabilities_.needConversion(HAL_PIXEL_FORMAT_YCbCr_420_888))
+				streamConfig.config.pixelFormat =
+					capabilities_.conversionFormats(HAL_PIXEL_FORMAT_YCbCr_420_888).first;
 			streamConfigs.push_back(std::move(streamConfig));
 
 			LOG(HAL, Info) << "Adding " << streamConfig.config.toString()
@@ -731,6 +774,20 @@ int CameraDevice::configureStreams(camera3_stream_configuration_t *stream_list)
 			    stream.type == CameraStream::Type::Internal)
 				sourceStream = &streams_.back();
 		}
+	}
+
+	/*
+	 * Android rotates the images itself, from android.sensor.orientation:
+	 * ask libcamera for the sensor's native orientation, i.e. no
+	 * transform. The default (upright) needs a rotation that a sensor
+	 * without flips cannot do, and validate() would report Adjusted.
+	 */
+	const auto &mountRotation = camera_->properties().get(properties::Rotation);
+	if (mountRotation) {
+		bool ok;
+		Orientation native = orientationFromRotation(*mountRotation, &ok);
+		if (ok)
+			config->orientation = native;
 	}
 
 	switch (config->validate()) {

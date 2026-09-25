@@ -10,7 +10,9 @@
 #include <utility>
 
 #include <libyuv/convert.h>
+#include <libyuv/convert_from_argb.h>
 #include <libyuv/scale.h>
+#include <libyuv/scale_argb.h>
 
 #include <libcamera/base/log.h>
 
@@ -33,6 +35,8 @@ namespace {
  */
 const std::map<PixelFormat, const std::vector<PixelFormat>> supportedConversions = {
 	{ formats::YUYV, { formats::NV12 } },
+	/* The output of the software ISP (debayer_cpu) */
+	{ formats::XRGB8888, { formats::NV12 } },
 };
 
 } /* namespace */
@@ -117,6 +121,69 @@ void PostProcessorYuv::process(Camera3RequestDescriptor::StreamBuffer *streamBuf
 					 destinationSize_.width,
 					 destinationSize_.height);
 		break;
+	case formats::XRGB8888: {
+		/* libcamera XRGB8888 is B, G, R, X in memory: libyuv "ARGB". */
+		const uint8_t *src = sourceMapped.planes()[0].data();
+		unsigned int srcStride = sourceStride_[0];
+		const unsigned int sw = sourceSize_.width;
+		const unsigned int sh = sourceSize_.height;
+		const unsigned int dw = destinationSize_.width;
+		const unsigned int dh = destinationSize_.height;
+
+		if (sw != dw || sh != dh) {
+			/*
+			 * A stream derived from a larger one: crop the centre to
+			 * the destination aspect ratio, then scale.
+			 */
+			unsigned int cw = sw, ch = sh;
+			if (static_cast<uint64_t>(sw) * dh > static_cast<uint64_t>(sh) * dw)
+				cw = (sh * dw / dh) & ~1u;
+			else
+				ch = (sw * dh / dw) & ~1u;
+
+			const uint8_t *crop = src + ((sh - ch) / 2) * srcStride +
+					      ((sw - cw) / 2) * 4;
+
+			/* Scaling up: convert first, then scale the smaller NV12. */
+			if (static_cast<uint64_t>(cw) * ch < static_cast<uint64_t>(dw) * dh) {
+				const size_t lumaSize = static_cast<size_t>(cw) * ch;
+				scaled_.resize(lumaSize * 3 / 2);
+				ret = libyuv::ARGBToNV12(crop, srcStride,
+							 scaled_.data(), cw,
+							 scaled_.data() + lumaSize, cw,
+							 cw, ch);
+				if (ret)
+					break;
+				ret = libyuv::NV12Scale(scaled_.data(), cw,
+							scaled_.data() + lumaSize, cw,
+							cw, ch,
+							destination->plane(0).data(),
+							destination->stride(0),
+							destination->plane(1).data(),
+							destination->stride(1),
+							dw, dh,
+							libyuv::FilterMode::kFilterBilinear);
+				break;
+			}
+
+			scaled_.resize(static_cast<size_t>(dw) * dh * 4);
+			ret = libyuv::ARGBScale(crop, srcStride, cw, ch,
+						scaled_.data(), dw * 4, dw, dh,
+						libyuv::FilterMode::kFilterBilinear);
+			if (ret)
+				break;
+			src = scaled_.data();
+			srcStride = dw * 4;
+		}
+
+		ret = libyuv::ARGBToNV12(src, srcStride,
+					 destination->plane(0).data(),
+					 destinationStride_[0],
+					 destination->plane(1).data(),
+					 destinationStride_[1],
+					 dw, dh);
+		break;
+	}
 	default:
 		LOG(YUV, Error) << "Unsupported source format " << sourceFormat_;
 		processComplete.emit(streamBuffer, PostProcessor::Status::Error);

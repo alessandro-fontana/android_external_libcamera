@@ -17,6 +17,9 @@
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
 
+#include <stdlib.h>
+#include <sys/system_properties.h>
+
 #include "LibcameraProvider.h"
 
 using ::android::hardware::camera::provider::implementation::LibcameraProvider;
@@ -29,6 +32,20 @@ const int HWBINDER_THREAD_COUNT = 6;
 int main()
 {
     ALOGI("LibcameraProvider libcamera service is starting.");
+
+    /*
+     * Debug knob: vendor.camera.libcamera.log_levels overrides the
+     * LIBCAMERA_LOG_LEVELS of the .rc (e.g. "*:WARN,HAL:DEBUG": the last
+     * match wins). libcamera reads it at its first log message.
+     */
+    char levels[PROP_VALUE_MAX] = {};
+    if (__system_property_get("vendor.camera.libcamera.log_levels", levels) > 0)
+        setenv("LIBCAMERA_LOG_LEVELS", levels, 1);
+
+    /* Debug knob: number of debayering threads of the software ISP. */
+    char threads[PROP_VALUE_MAX] = {};
+    if (__system_property_get("vendor.camera.libcamera.softisp_threads", threads) > 0)
+        setenv("LIBCAMERA_SOFTISP_THREADS", threads, 1);
 
     ABinderProcess_setThreadPoolMaxThreadCount(HWBINDER_THREAD_COUNT);
 

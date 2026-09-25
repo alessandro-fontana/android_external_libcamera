@@ -17,6 +17,8 @@
 #include <libcamera/base/thread.h>
 
 #include <libcamera/camera.h>
+
+#include "libcamera/internal/dma_buf_allocator.h"
 #include <libcamera/framebuffer.h>
 #include <libcamera/geometry.h>
 #include <libcamera/pixel_format.h>
@@ -177,6 +179,8 @@ private:
 	const unsigned int index_;
 
 	std::unique_ptr<PlatformFrameBufferAllocator> allocator_;
+	/* CPU-only intermediate buffers (software ISP output), cached. */
+	std::unique_ptr<libcamera::DmaBufAllocator> dmaAllocator_;
 	std::vector<std::unique_ptr<libcamera::FrameBuffer>> allocatedBuffers_;
 	std::vector<libcamera::FrameBuffer *> buffers_ LIBCAMERA_TSA_GUARDED_BY(mutex_);
 	/*

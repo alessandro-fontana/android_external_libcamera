@@ -100,7 +100,13 @@ DmaBufAllocator::DmaBufAllocator(DmaBufAllocatorFlags type)
 		if (!(type & info.type))
 			continue;
 
-		int ret = ::open(info.deviceNodeName, O_RDWR | O_CLOEXEC, 0);
+		/*
+		 * Read-only is enough for DMA_HEAP_IOCTL_ALLOC, and it is all
+		 * Android grants: /dev/dma_heap/system is 0444 there, so O_RDWR
+		 * fails for any non-root process and the allocator falls back
+		 * to udmabuf, or to nothing.
+		 */
+		int ret = ::open(info.deviceNodeName, O_RDONLY | O_CLOEXEC, 0);
 		if (ret < 0) {
 			ret = errno;
 			LOG(DmaBufAllocator, Debug)

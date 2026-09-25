@@ -10,6 +10,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <ui/GraphicBufferMapper.h>
+
 #include <libcamera/base/log.h>
 
 #include "libcamera/internal/formats.h"
@@ -48,6 +50,7 @@ private:
 
 	void map();
 
+	buffer_handle_t handle_;
 	int fd_;
 	int flags_;
 	off_t bufferLength_;
@@ -59,7 +62,8 @@ CameraBuffer::Private::Private([[maybe_unused]] CameraBuffer *cameraBuffer,
 			       buffer_handle_t camera3Buffer,
 			       PixelFormat pixelFormat,
 			       const Size &size, int flags)
-	: fd_(-1), flags_(flags), bufferLength_(-1), mapped_(false)
+	: handle_(camera3Buffer), fd_(-1), flags_(flags), bufferLength_(-1),
+	  mapped_(false)
 {
 	error_ = 0;
 
@@ -154,6 +158,18 @@ unsigned int CameraBuffer::Private::size(unsigned int plane) const
 size_t CameraBuffer::Private::jpegBufferSize(size_t maxJpegBufferSize) const
 {
 	ASSERT(bufferLength_ >= 0);
+
+	/*
+	 * The framework looks for the JPEG blob header at the end of the
+	 * buffer's logical size, the gralloc width of a BLOB buffer, which it
+	 * scales down for JPEGs smaller than the maximum. The dma-buf behind
+	 * it may be larger (gbm_mesa rounds a BLOB up to 4096-byte rows), so
+	 * its length from lseek() puts the header where nobody reads it.
+	 */
+	uint64_t width = 0;
+	if (android::GraphicBufferMapper::get().getWidth(handle_, &width) == android::OK &&
+	    width > 0 && width <= static_cast<uint64_t>(bufferLength_))
+		return std::min<size_t>(width, maxJpegBufferSize);
 
 	return std::min<unsigned int>(bufferLength_, maxJpegBufferSize);
 }

@@ -13,9 +13,12 @@
 
 #include <algorithm>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
+#include <thread>
 #include <time.h>
 #include <utility>
+#include <vector>
 
 #include <linux/dma-buf.h>
 
@@ -51,6 +54,18 @@ DebayerCpu::DebayerCpu(std::unique_ptr<SwStatsCpu> stats)
 	 * future.
 	 */
 	enableInputMemcpy_ = true;
+
+	/*
+	 * Split the debayering of a 2-line pattern over several cores: a
+	 * single Cortex-A53 core is too slow to debayer 2 MP at preview frame
+	 * rates. LIBCAMERA_SOFTISP_THREADS=1 selects the single-threaded path.
+	 */
+	threads_ = 6;
+	if (const char *env = utils::secure_getenv("LIBCAMERA_SOFTISP_THREADS")) {
+		int n = atoi(env);
+		if (n >= 1 && n <= 8)
+			threads_ = n;
+	}
 
 	/* Initialize color lookup tables */
 	for (unsigned int i = 0; i < DebayerParams::kRGBLookupSize; i++) {
@@ -697,6 +712,136 @@ void DebayerCpu::process2(const uint8_t *src, uint8_t *dst)
 	}
 }
 
+/*
+ * Row \a row of the window, relative to its top: above and below the frame
+ * the neighbour rows are mirrored the way process2() does it.
+ */
+const uint8_t *DebayerCpu::rowPointer2(const uint8_t *src, int row) const
+{
+	const int height = window_.height;
+
+	if (window_.y == 0) {
+		if (row < 0)
+			row = 1;
+		else if (row >= height)
+			row = height - 2;
+	}
+
+	return src + static_cast<ptrdiff_t>(row) * inputConfig_.stride;
+}
+
+/* Debayer the window rows [rowStart, rowEnd), rowStart even; no shared state is written. */
+void DebayerCpu::debayerRows2(const uint8_t *src, uint8_t *dst,
+			      unsigned int rowStart, unsigned int rowEnd)
+{
+	const uint8_t *linePointers[3];
+
+	dst += static_cast<ptrdiff_t>(rowStart) * outputConfig_.stride;
+
+	for (unsigned int r = rowStart; r < rowEnd; r += 2) {
+		linePointers[0] = rowPointer2(src, r - 1);
+		linePointers[1] = rowPointer2(src, r);
+		linePointers[2] = rowPointer2(src, r + 1);
+		(this->*debayer0_)(dst, linePointers);
+		dst += outputConfig_.stride;
+
+		linePointers[0] = linePointers[1];
+		linePointers[1] = linePointers[2];
+		linePointers[2] = rowPointer2(src, r + 2);
+		(this->*debayer1_)(dst, linePointers);
+		dst += outputConfig_.stride;
+	}
+}
+
+/*
+ * Debayer a stripe into ordinary memory, then copy it to the output in bulk:
+ * the output is often an uncached gralloc mapping, and the byte stores of the
+ * debayering, harmless from one thread, stall when several cores issue them.
+ */
+void DebayerCpu::debayerStripe2(const uint8_t *src, uint8_t *dst,
+				unsigned int rowStart, unsigned int rowEnd)
+{
+	const size_t ostride = outputConfig_.stride;
+	std::vector<uint8_t> tmp((rowEnd - rowStart) * ostride);
+
+	/* debayerRows2() indexes dst by absolute row: shift the base back. */
+	debayerRows2(src, tmp.data() - rowStart * ostride, rowStart, rowEnd);
+	memcpy(dst + rowStart * ostride, tmp.data(), tmp.size());
+}
+
+void DebayerCpu::process2Threaded(const uint8_t *src, uint8_t *dst)
+{
+	const unsigned int height = window_.height;
+	const uint8_t *linePointers[3];
+
+	/* Adjust src to top left corner of the window */
+	src += window_.y * inputConfig_.stride + window_.x * inputConfig_.bpp / 8;
+
+	/* Even-aligned stripes, one per thread. */
+	unsigned int stripe = ((height / threads_) + 1) & ~1u;
+	std::vector<std::thread> workers;
+
+	/*
+	 * The capture buffer may be uncached, where the scattered reads of
+	 * the debayering crawl (the single-threaded path copies each line for
+	 * the same reason). Copy the rows the window reads, whole strides,
+	 * in parallel into ordinary memory first, then work from the copy:
+	 * rows -1 .. height relative to the window when it does not start at
+	 * the top of the frame, 0 .. height - 1 when it does (rowPointer2()
+	 * mirrors the neighbours there).
+	 */
+	{
+		const size_t stride = inputConfig_.stride;
+		const size_t xOffset = window_.x * inputConfig_.bpp / 8;
+		const int first = window_.y ? -1 : 0;
+		const unsigned int rows = height + (window_.y ? 2 : 0);
+		const uint8_t *base = src - xOffset + first * static_cast<ptrdiff_t>(stride);
+
+		frameCopy_.resize(stride * rows);
+		uint8_t *copy = frameCopy_.data();
+		unsigned int chunk = (rows + threads_ - 1) / threads_;
+		for (unsigned int i = 0; i < threads_; i++) {
+			unsigned int start = i * chunk;
+			unsigned int end = std::min(rows, start + chunk);
+			if (start >= end)
+				break;
+			workers.emplace_back([=] {
+				memcpy(copy + start * stride, base + start * stride,
+				       (end - start) * stride);
+			});
+		}
+		for (std::thread &w : workers)
+			w.join();
+		workers.clear();
+		src = copy - first * static_cast<ptrdiff_t>(stride) + xOffset;
+	}
+	for (unsigned int i = 1; i < threads_; i++) {
+		unsigned int start = i * stripe;
+		unsigned int end = std::min(height, start + stripe);
+		if (start >= end)
+			break;
+		workers.emplace_back([this, src, dst, start, end] {
+			debayerStripe2(src, dst, start, end);
+		});
+	}
+
+	/*
+	 * The statistics accumulate into shared state: gather them here, on
+	 * the same sampled rows as process2(), while the workers debayer.
+	 */
+	for (unsigned int r = 0; r < height; r += 2) {
+		linePointers[0] = rowPointer2(src, r - 1);
+		linePointers[1] = rowPointer2(src, r);
+		linePointers[2] = rowPointer2(src, r + 1);
+		stats_->processLine0(window_.y + r, linePointers);
+	}
+
+	debayerStripe2(src, dst, 0, std::min(height, stripe));
+
+	for (std::thread &w : workers)
+		w.join();
+}
+
 void DebayerCpu::process4(const uint8_t *src, uint8_t *dst)
 {
 	const unsigned int yEnd = window_.y + window_.height;
@@ -807,7 +952,9 @@ void DebayerCpu::process(uint32_t frame, FrameBuffer *input, FrameBuffer *output
 
 	stats_->startFrame();
 
-	if (inputConfig_.patternSize.height == 2)
+	if (inputConfig_.patternSize.height == 2 && threads_ > 1)
+		process2Threaded(in.planes()[0].data(), out.planes()[0].data());
+	else if (inputConfig_.patternSize.height == 2)
 		process2(in.planes()[0].data(), out.planes()[0].data());
 	else
 		process4(in.planes()[0].data(), out.planes()[0].data());

@@ -133,6 +133,15 @@ const std::map<int, const Camera3Format> camera3FormatsMap = {
  */
 const std::map<PixelFormat, const std::vector<PixelFormat>> yuvConversions = {
 	{ formats::YUYV, { formats::NV12 } },
+	{ formats::XRGB8888, { formats::NV12 } },
+};
+
+/*
+ * Formats the libjpeg encoder reads as they are: a BLOB stream fed by one of
+ * them goes to the JPEG post-processor without a conversion step.
+ */
+const std::vector<PixelFormat> jpegDirectInputs = {
+	formats::XRGB8888,
 };
 
 const std::map<camera_metadata_enum_android_info_supported_hardware_level, std::string>
@@ -611,9 +620,17 @@ int CameraCapabilities::initializeStreamConfigurations()
 
 							if (status != CameraConfiguration::Invalid && cfg.pixelFormat == inputFormat) {
 								mappedFormat = inputFormat;
+								formatMapped = true;
+								if (std::find(jpegDirectInputs.begin(), jpegDirectInputs.end(),
+									      inputFormat) != jpegDirectInputs.end()) {
+									/* Encoded straight from the source stream. */
+									formatsMap_[androidFormat] = formats::MJPEG;
+									LOG(HAL, Debug) << "BLOB format: encoding " << inputFormat
+											<< " directly";
+									break;
+								}
 								formatsMap_[androidFormat] = inputFormat;
 								conversionMap_[androidFormat] = std::make_pair(inputFormat, outputFormat);
-								formatMapped = true;
 								LOG(HAL, Debug) << "BLOB format: Will convert " << inputFormat
 										<< " to " << outputFormat << " for JPEG encoding";
 								break;
@@ -1594,12 +1611,10 @@ PixelFormat CameraCapabilities::toPixelFormat(int format) const
  */
 bool CameraCapabilities::needConversion(int format) const
 {
+	/* Not an error: most formats are produced without a conversion. */
 	auto it = conversionMap_.find(format);
-	if (it == conversionMap_.end()) {
-		LOG(HAL, Error) << "Requested format " << utils::hex(format)
-				<< " not supported for conversion";
+	if (it == conversionMap_.end())
 		return false;
-	}
 
 	return true;
 }

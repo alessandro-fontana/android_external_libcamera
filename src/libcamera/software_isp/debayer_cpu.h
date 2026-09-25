@@ -133,6 +133,12 @@ private:
 	void shiftLinePointers(const uint8_t *linePointers[], const uint8_t *src);
 	void memcpyNextLine(const uint8_t *linePointers[]);
 	void process2(const uint8_t *src, uint8_t *dst);
+	void process2Threaded(const uint8_t *src, uint8_t *dst);
+	void debayerRows2(const uint8_t *src, uint8_t *dst, unsigned int rowStart,
+			  unsigned int rowEnd);
+	const uint8_t *rowPointer2(const uint8_t *src, int row) const;
+	void debayerStripe2(const uint8_t *src, uint8_t *dst, unsigned int rowStart,
+			    unsigned int rowEnd);
 	void process4(const uint8_t *src, uint8_t *dst);
 
 	/* Max. supported Bayer pattern height is 4, debayering this requires 5 lines */
@@ -159,6 +165,9 @@ private:
 	unsigned int lineBufferIndex_;
 	unsigned int xShift_; /* Offset of 0/1 applied to window_.x */
 	bool enableInputMemcpy_;
+	/* Parallel debayering of 2-line patterns */
+	unsigned int threads_;
+	std::vector<uint8_t> frameCopy_;
 	bool swapRedBlueGains_;
 	unsigned int measuredFrames_;
 	int64_t frameProcessTime_;

@@ -510,8 +510,8 @@ void LibcameraDeviceSession::ResultBatcher::freeReleaseFences(std::vector<Captur
         for (auto& buf : result.outputBuffers) {
             native_handle_t* resultFence = makeFromAidl(buf.releaseFence);
             if (resultFence != nullptr) {
-                native_handle_close(handle);
-                native_handle_delete(handle);
+                native_handle_close(resultFence);
+                native_handle_delete(resultFence);
             }
         }
     }
