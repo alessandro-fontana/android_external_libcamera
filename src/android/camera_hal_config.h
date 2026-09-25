@@ -15,6 +15,8 @@
 struct CameraConfigData {
 	int facing = -1;
 	int rotation = -1;
+	/* Name of the flash LED under /sys/class/leds, if the camera has one */
+	std::string flash;
 };
 
 class CameraHalConfig final : public libcamera::Extensible

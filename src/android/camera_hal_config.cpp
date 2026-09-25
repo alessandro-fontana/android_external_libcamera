@@ -106,6 +106,10 @@ int CameraHalConfig::Private::parseCameraConfigData(const std::string &cameraId,
 	if (parseRotation(cameraObject, cameraConfigData))
 		return -EINVAL;
 
+	/* Optional property "flash": the LED class device of the flash. */
+	if (cameraObject.contains("flash"))
+		cameraConfigData.flash = cameraObject["flash"].get<std::string>("");
+
 	return 0;
 }
 

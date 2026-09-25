@@ -10,6 +10,7 @@
 #include <system/camera_metadata.h>
 
 #include "camera_device.h"
+#include "camera_hal_manager.h"
 
 using namespace libcamera;
 
@@ -86,6 +87,7 @@ int hal_dev_close(hw_device_t *hw_device)
 	CameraDevice *camera = reinterpret_cast<CameraDevice *>(dev->priv);
 
 	camera->close();
+	CameraHalManager::instance()->close(camera);
 
 	return 0;
 }

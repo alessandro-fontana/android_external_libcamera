@@ -419,11 +419,12 @@ void CameraCapabilities::computeHwLevel(
 }
 
 int CameraCapabilities::initialize(std::shared_ptr<Camera> camera,
-				   int orientation, int facing)
+				   int orientation, int facing, bool hasFlash)
 {
 	camera_ = camera;
 	orientation_ = orientation;
 	facing_ = facing;
+	hasFlash_ = hasFlash;
 	rawStreamAvailable_ = false;
 	maxFrameDuration_ = 0;
 
@@ -1058,6 +1059,10 @@ int CameraCapabilities::initializeStaticMetadata()
 	std::vector<uint8_t> aeAvailableModes = {
 		ANDROID_CONTROL_AE_MODE_ON,
 	};
+	if (hasFlash_) {
+		aeAvailableModes.push_back(ANDROID_CONTROL_AE_MODE_ON_AUTO_FLASH);
+		aeAvailableModes.push_back(ANDROID_CONTROL_AE_MODE_ON_ALWAYS_FLASH);
+	}
 	staticMetadata_->addEntry(ANDROID_CONTROL_AE_AVAILABLE_MODES,
 				  aeAvailableModes);
 
@@ -1353,7 +1358,8 @@ int CameraCapabilities::initializeStaticMetadata()
 		    ANDROID_SYNC_MAX_LATENCY_UNKNOWN);
 
 	/* Flash static metadata. */
-	char flashAvailable = ANDROID_FLASH_INFO_AVAILABLE_FALSE;
+	char flashAvailable = hasFlash_ ? ANDROID_FLASH_INFO_AVAILABLE_TRUE
+					: ANDROID_FLASH_INFO_AVAILABLE_FALSE;
 	staticMetadata_->addEntry(ANDROID_FLASH_INFO_AVAILABLE,
 				  flashAvailable);
 

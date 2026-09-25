@@ -10,6 +10,7 @@
 #include <libcamera/orientation.h>
 
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <set>
 #include <sys/mman.h>
@@ -379,7 +380,145 @@ int CameraDevice::initialize(const CameraConfigData *cameraConfigData)
 		orientation_ = 0;
 	}
 
-	return capabilities_.initialize(camera_, orientation_, facing_);
+	if (cameraConfigData && !cameraConfigData->flash.empty()) {
+		std::string led = "/sys/class/leds/" + cameraConfigData->flash;
+		std::ifstream max(led + "/max_brightness");
+		int levels = 0;
+
+		max >> levels;
+		if (levels > 0) {
+			flash_.brightness = led + "/brightness";
+			flash_.levels = levels;
+			LOG(HAL, Info) << "Flash LED " << cameraConfigData->flash
+				       << ", " << levels << " torch levels";
+		} else {
+			LOG(HAL, Error) << "Flash LED " << led << " not found";
+		}
+	}
+
+	return capabilities_.initialize(camera_, orientation_, facing_,
+					hasFlash());
+}
+
+bool CameraDevice::setLed(bool on)
+{
+	if (on == flash_.ledOn)
+		return true;
+
+	std::ofstream brightness(flash_.brightness);
+	brightness << (on ? flash_.levels : 0) << std::endl;
+	if (!brightness) {
+		LOG(HAL, Error) << "Failed to switch the flash LED "
+				<< (on ? "on" : "off");
+		return false;
+	}
+
+	flash_.ledOn = on;
+	return true;
+}
+
+/* The torch outside a camera session (Android's flashlight). */
+int CameraDevice::setTorchMode(bool enable)
+{
+	if (!hasFlash())
+		return -ENOSYS;
+
+	MutexLocker lock(flash_.lock);
+	if (!setLed(enable))
+		return -EIO;
+	flash_.torch = enable;
+
+	return 0;
+}
+
+/* Called for each request queued: the settings decide the LED. */
+void CameraDevice::updateFlash(Camera3RequestDescriptor *descriptor)
+{
+	if (!hasFlash())
+		return;
+
+	const CameraMetadata &settings = descriptor->settings_;
+	camera_metadata_ro_entry_t entry;
+
+	MutexLocker lock(flash_.lock);
+
+	/* Settings are only sent when they change. */
+	if (settings.isValid()) {
+		if (settings.getEntry(ANDROID_CONTROL_AE_MODE, &entry))
+			flash_.aeMode = *entry.data.u8;
+		if (settings.getEntry(ANDROID_FLASH_MODE, &entry))
+			flash_.flashMode = *entry.data.u8;
+
+		bool flashAe = flash_.aeMode == ANDROID_CONTROL_AE_MODE_ON_ALWAYS_FLASH ||
+			       (flash_.aeMode == ANDROID_CONTROL_AE_MODE_ON_AUTO_FLASH &&
+				flash_.dark);
+
+		if (settings.getEntry(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER, &entry)) {
+			switch (*entry.data.u8) {
+			case ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_START:
+				if (flashAe) {
+					flash_.assist = true;
+					flash_.assistSince = std::chrono::steady_clock::now();
+					/* Frames for the AE to settle on the LED. */
+					flash_.precaptureFrames = 8;
+				}
+				break;
+			case ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL:
+				flash_.assist = false;
+				flash_.precaptureFrames = 0;
+				break;
+			default:
+				break;
+			}
+		}
+
+		if (settings.getEntry(ANDROID_CONTROL_CAPTURE_INTENT, &entry) &&
+		    *entry.data.u8 == ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE &&
+		    flash_.assist)
+			descriptor->flashCapture_ = true;
+	}
+
+	flash_.torch = flash_.flashMode == ANDROID_FLASH_MODE_TORCH;
+	descriptor->aeMode_ = flash_.aeMode;
+	descriptor->flashMode_ = flash_.flashMode;
+
+	setLed(flash_.torch || flash_.assist);
+}
+
+/* Called for each completed request, before its result metadata. */
+void CameraDevice::flashFrameDone(Camera3RequestDescriptor *descriptor)
+{
+	if (!hasFlash())
+		return;
+
+	MutexLocker lock(flash_.lock);
+
+	/* Auto flash fires when the scene needs a large analogue gain. */
+	const auto &gain = descriptor->request_->metadata().get(controls::AnalogueGain);
+	if (gain && !flash_.ledOn)
+		flash_.dark = *gain >= 4.0f;
+
+	descriptor->aeState_ = ANDROID_CONTROL_AE_STATE_CONVERGED;
+	if (flash_.precaptureFrames) {
+		flash_.precaptureFrames--;
+		descriptor->aeState_ = ANDROID_CONTROL_AE_STATE_PRECAPTURE;
+	} else if (flash_.aeMode == ANDROID_CONTROL_AE_MODE_ON_AUTO_FLASH &&
+		   flash_.dark && !flash_.assist) {
+		descriptor->aeState_ = ANDROID_CONTROL_AE_STATE_FLASH_REQUIRED;
+	}
+
+	descriptor->flashState_ = flash_.ledOn ? ANDROID_FLASH_STATE_FIRED
+					       : ANDROID_FLASH_STATE_READY;
+
+	/* The still capture is done, or it never came: LED off. */
+	bool expired = flash_.assist &&
+		       std::chrono::steady_clock::now() - flash_.assistSince >
+			       std::chrono::seconds(3);
+	if (descriptor->flashCapture_ || expired) {
+		flash_.assist = false;
+		flash_.precaptureFrames = 0;
+		setLed(flash_.torch);
+	}
 }
 
 /*
@@ -413,6 +552,15 @@ int CameraDevice::open(const hw_module_t *hardwareModule)
 void CameraDevice::close()
 {
 	stop();
+
+	if (hasFlash()) {
+		MutexLocker lock(flash_.lock);
+		flash_.assist = false;
+		flash_.torch = false;
+		flash_.flashMode = ANDROID_FLASH_MODE_OFF;
+		flash_.aeMode = ANDROID_CONTROL_AE_MODE_ON;
+		setLed(false);
+	}
 
 	camera_->release();
 }
@@ -1178,6 +1326,8 @@ int CameraDevice::processCaptureRequest(camera3_capture_request_t *camera3Reques
 		requestedStreams.insert(sourceStream);
 	}
 
+	updateFlash(descriptor.get());
+
 	/*
 	 * Translate controls from Android to libcamera and queue the request
 	 * to the camera.
@@ -1284,6 +1434,7 @@ void CameraDevice::requestComplete(Request *request)
 				<< (frameLost ? " (frame lost)" : "");
 
 		abortRequest(descriptor);
+		flashFrameDone(descriptor);
 
 		/* Nothing will post-process them: give the internal buffers back. */
 		for (auto &buffer : descriptor->buffers_) {
@@ -1309,6 +1460,8 @@ void CameraDevice::requestComplete(Request *request)
 								 .get(controls::SensorTimestamp)
 								 .value_or(0));
 	notifyShutter(descriptor->frameNumber_, sensorTimestamp);
+
+	flashFrameDone(descriptor);
 
 	LOG(HAL, Debug) << "Request " << request->cookie() << " completed with "
 			<< descriptor->request_->buffers().size() << " streams";
@@ -1589,7 +1742,7 @@ CameraDevice::getResultMetadata(const Camera3RequestDescriptor &descriptor) cons
 	value = ANDROID_CONTROL_AE_LOCK_OFF;
 	resultMetadata->addEntry(ANDROID_CONTROL_AE_LOCK, value);
 
-	value = ANDROID_CONTROL_AE_MODE_ON;
+	value = descriptor.aeMode_;
 	resultMetadata->addEntry(ANDROID_CONTROL_AE_MODE, value);
 
 	if (settings.getEntry(ANDROID_CONTROL_AE_TARGET_FPS_RANGE, &entry))
@@ -1606,7 +1759,7 @@ CameraDevice::getResultMetadata(const Camera3RequestDescriptor &descriptor) cons
 			(uint8_t)ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_IDLE;
 	resultMetadata->addEntry(ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER, value);
 
-	value = ANDROID_CONTROL_AE_STATE_CONVERGED;
+	value = descriptor.aeState_;
 	resultMetadata->addEntry(ANDROID_CONTROL_AE_STATE, value);
 
 	value = ANDROID_CONTROL_AF_MODE_OFF;
@@ -1642,10 +1795,11 @@ CameraDevice::getResultMetadata(const Camera3RequestDescriptor &descriptor) cons
 	value = ANDROID_CONTROL_VIDEO_STABILIZATION_MODE_OFF;
 	resultMetadata->addEntry(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE, value);
 
-	value = ANDROID_FLASH_MODE_OFF;
+	value = descriptor.flashMode_;
 	resultMetadata->addEntry(ANDROID_FLASH_MODE, value);
 
-	value = ANDROID_FLASH_STATE_UNAVAILABLE;
+	value = hasFlash() ? descriptor.flashState_
+			   : (uint8_t)ANDROID_FLASH_STATE_UNAVAILABLE;
 	resultMetadata->addEntry(ANDROID_FLASH_STATE, value);
 
 	if (settings.getEntry(ANDROID_LENS_APERTURE, &entry))

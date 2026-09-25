@@ -79,6 +79,13 @@ public:
 	bool complete_ = false;
 	Status status_ = Status::Success;
 
+	/* Flash: the modes in force for this request, and what it reports. */
+	uint8_t aeMode_ = 1; /* ANDROID_CONTROL_AE_MODE_ON */
+	uint8_t flashMode_ = 0; /* ANDROID_FLASH_MODE_OFF */
+	bool flashCapture_ = false;
+	uint8_t aeState_ = 2; /* ANDROID_CONTROL_AE_STATE_CONVERGED */
+	uint8_t flashState_ = 0; /* ANDROID_FLASH_STATE_UNAVAILABLE */
+
 private:
 	LIBCAMERA_DISABLE_COPY(Camera3RequestDescriptor)
 };

@@ -57,6 +57,8 @@ public:
 	const std::string &model() const { return model_; }
 	int facing() const { return facing_; }
 	int orientation() const { return orientation_; }
+	bool hasFlash() const { return flash_.levels > 0; }
+	int setTorchMode(bool enable);
 	unsigned int maxJpegBufferSize() const;
 
 	void setCallbacks(const camera3_callback_ops_t *callbacks);
@@ -128,4 +130,27 @@ private:
 	int orientation_;
 
 	CameraMetadata lastSettings_;
+
+	/*
+	 * The flash LED, driven from sysfs. With a software ISP there is no
+	 * strobe synchronised with the exposure: the LED stays on from the
+	 * AE precapture to the end of the still capture, and AE adapts to it.
+	 */
+	void updateFlash(Camera3RequestDescriptor *descriptor);
+	void flashFrameDone(Camera3RequestDescriptor *descriptor);
+	bool setLed(bool on);
+
+	struct {
+		std::string brightness;
+		int levels = 0;
+		libcamera::Mutex lock;
+		bool torch = false; /* FLASH_MODE_TORCH, or set_torch_mode */
+		bool assist = false; /* from the precapture to the capture */
+		unsigned int precaptureFrames = 0;
+		std::chrono::steady_clock::time_point assistSince;
+		bool dark = false; /* the last frame needed a large gain */
+		bool ledOn = false;
+		uint8_t aeMode = 1;
+		uint8_t flashMode = 0;
+	} flash_;
 };

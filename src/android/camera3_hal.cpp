@@ -45,10 +45,9 @@ static int hal_open_legacy([[maybe_unused]] const struct hw_module_t *module,
 	return -ENOSYS;
 }
 
-static int hal_set_torch_mode([[maybe_unused]] const char *camera_id,
-			      [[maybe_unused]] bool enabled)
+static int hal_set_torch_mode(const char *camera_id, bool enabled)
 {
-	return -ENOSYS;
+	return CameraHalManager::instance()->setTorchMode(camera_id, enabled);
 }
 
 /*

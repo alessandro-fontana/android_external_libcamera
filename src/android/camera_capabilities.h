@@ -26,7 +26,7 @@ public:
 	CameraCapabilities() = default;
 
 	int initialize(std::shared_ptr<libcamera::Camera> camera,
-		       int orientation, int facing);
+		       int orientation, int facing, bool hasFlash = false);
 
 	CameraMetadata *staticMetadata() const { return staticMetadata_.get(); }
 	libcamera::PixelFormat toPixelFormat(int format) const;
@@ -73,6 +73,7 @@ private:
 
 	int facing_;
 	int orientation_;
+	bool hasFlash_ = false;
 	bool rawStreamAvailable_;
 	int64_t maxFrameDuration_;
 	camera_metadata_enum_android_info_supported_hardware_level hwLevel_;

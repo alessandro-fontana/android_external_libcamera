@@ -8,6 +8,7 @@
 #pragma once
 
 #include <map>
+#include <set>
 #include <stddef.h>
 #include <tuple>
 #include <vector>
@@ -37,6 +38,9 @@ public:
 	std::tuple<CameraDevice *, int>
 	open(unsigned int id, const hw_module_t *module);
 
+	void close(CameraDevice *camera);
+	int setTorchMode(const char *cameraId, bool enabled);
+
 	unsigned int numCameras() const;
 	int getCameraInfo(unsigned int id, struct camera_info *info);
 	void setCallbacks(const camera_module_callbacks_t *callbacks);
@@ -54,6 +58,10 @@ private:
 	void cameraRemoved(std::shared_ptr<libcamera::Camera> cam);
 
 	CameraDevice *cameraDeviceFromHalId(unsigned int id) LIBCAMERA_TSA_REQUIRES(mutex_);
+	void notifyTorch(CameraDevice *camera, int status);
+
+	/* Cameras open in a session: their torch is not available. */
+	std::set<CameraDevice *> openCameras_ LIBCAMERA_TSA_GUARDED_BY(mutex_);
 
 	std::unique_ptr<libcamera::CameraManager> cameraManager_;
 	CameraHalConfig halConfig_;

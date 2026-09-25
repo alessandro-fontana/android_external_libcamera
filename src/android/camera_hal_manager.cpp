@@ -94,7 +94,57 @@ CameraHalManager::open(unsigned int id, const hw_module_t *hardwareModule)
 
 	LOG(HAL, Info) << "Open camera '" << id << "'";
 
+	/* The session owns the flash now: the torch turns off. */
+	if (camera->hasFlash()) {
+		camera->setTorchMode(false);
+		openCameras_.insert(camera);
+		notifyTorch(camera, TORCH_MODE_STATUS_NOT_AVAILABLE);
+	}
+
 	return { camera, 0 };
+}
+
+void CameraHalManager::close(CameraDevice *camera)
+{
+	MutexLocker locker(mutex_);
+
+	if (openCameras_.erase(camera))
+		notifyTorch(camera, TORCH_MODE_STATUS_AVAILABLE_OFF);
+}
+
+void CameraHalManager::notifyTorch(CameraDevice *camera, int status)
+{
+	if (!callbacks_ || !callbacks_->torch_mode_status_change)
+		return;
+
+	std::string id = std::to_string(camera->id());
+	callbacks_->torch_mode_status_change(callbacks_, id.c_str(), status);
+}
+
+int CameraHalManager::setTorchMode(const char *cameraId, bool enabled)
+{
+	MutexLocker locker(mutex_);
+
+	char *end;
+	unsigned long id = strtoul(cameraId, &end, 10);
+	if (*end != '\0')
+		return -EINVAL;
+
+	CameraDevice *camera = cameraDeviceFromHalId(id);
+	if (!camera)
+		return -EINVAL;
+	if (!camera->hasFlash())
+		return -ENOSYS;
+	if (openCameras_.count(camera))
+		return -EBUSY;
+
+	int ret = camera->setTorchMode(enabled);
+	if (ret)
+		return ret;
+
+	notifyTorch(camera, enabled ? TORCH_MODE_STATUS_AVAILABLE_ON
+				    : TORCH_MODE_STATUS_AVAILABLE_OFF);
+	return 0;
 }
 
 void CameraHalManager::cameraAdded(std::shared_ptr<Camera> cam)
