@@ -48,7 +48,7 @@ LOG_DECLARE_CATEGORY(SoftwareIsp)
 class SoftwareIsp : public Object
 {
 public:
-	SoftwareIsp(PipelineHandler *pipe, const CameraSensor *sensor,
+	SoftwareIsp(PipelineHandler *pipe, CameraSensor *sensor,
 		    ControlInfoMap *ipaControls);
 	~SoftwareIsp();
 
@@ -91,6 +91,7 @@ public:
 private:
 	void saveIspParams();
 	void setSensorCtrls(const ControlList &sensorControls);
+	void setLensCtrls(const ControlList &lensControls);
 	void statsReady(uint32_t frame, uint32_t bufferId);
 	void inputReady(FrameBuffer *input);
 	void outputReady(FrameBuffer *output);
@@ -101,6 +102,7 @@ private:
 	DebayerParams debayerParams_;
 	DmaBufAllocator dmaHeap_;
 	bool ccmEnabled_;
+	CameraLens *lens_;
 
 	std::unique_ptr<ipa::soft::IPAProxySoft> ipa_;
 	std::deque<FrameBuffer *> queuedInputBuffers_;

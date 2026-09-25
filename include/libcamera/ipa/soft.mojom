@@ -17,7 +17,8 @@ interface IPASoftInterface {
 	     libcamera.SharedFD fdStats,
 	     libcamera.SharedFD fdParams,
 	     libcamera.IPACameraSensorInfo sensorInfo,
-	     libcamera.ControlInfoMap sensorControls)
+	     libcamera.ControlInfoMap sensorControls,
+	     libcamera.ControlInfoMap lensControls)
 		=> (int32 ret, libcamera.ControlInfoMap ipaControls, bool ccmEnabled);
 	start() => (int32 ret);
 	stop();
@@ -33,6 +34,7 @@ interface IPASoftInterface {
 
 interface IPASoftEventInterface {
 	setSensorControls(libcamera.ControlList sensorControls);
+	setLensControls(libcamera.ControlList lensControls);
 	setIspParams();
 	metadataReady(uint32 frame, libcamera.ControlList metadata);
 };

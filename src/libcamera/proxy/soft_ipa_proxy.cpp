@@ -82,6 +82,7 @@ IPAProxySoft::IPAProxySoft(IPAModule *ipam, bool isolate)
 
 
 	ipa_->setSensorControls.connect(this, &IPAProxySoft::setSensorControlsThread);
+	ipa_->setLensControls.connect(this, &IPAProxySoft::setLensControlsThread);
 	ipa_->setIspParams.connect(this, &IPAProxySoft::setIspParamsThread);
 	ipa_->metadataReady.connect(this, &IPAProxySoft::metadataReadyThread);
 
@@ -109,6 +110,10 @@ void IPAProxySoft::recvMessage(const IPCMessage &data)
 		setSensorControlsIPC(data.data().cbegin(), dataSize, data.fds());
 		break;
 	}
+	case _SoftEventCmd::SetLensControls: {
+		setLensControlsIPC(data.data().cbegin(), dataSize, data.fds());
+		break;
+	}
 	case _SoftEventCmd::SetIspParams: {
 		setIspParamsIPC(data.data().cbegin(), dataSize, data.fds());
 		break;
@@ -129,13 +134,14 @@ int32_t IPAProxySoft::init(
 	const SharedFD &fdParams,
 	const IPACameraSensorInfo &sensorInfo,
 	const ControlInfoMap &sensorControls,
+	const ControlInfoMap &lensControls,
 	ControlInfoMap *ipaControls,
 	bool *ccmEnabled)
 {
 	if (isolate_)
-		return initIPC(settings, fdStats, fdParams, sensorInfo, sensorControls, ipaControls, ccmEnabled);
+		return initIPC(settings, fdStats, fdParams, sensorInfo, sensorControls, lensControls, ipaControls, ccmEnabled);
 	else
-		return initThread(settings, fdStats, fdParams, sensorInfo, sensorControls, ipaControls, ccmEnabled);
+		return initThread(settings, fdStats, fdParams, sensorInfo, sensorControls, lensControls, ipaControls, ccmEnabled);
 }
 
 int32_t IPAProxySoft::initThread(
@@ -144,10 +150,11 @@ int32_t IPAProxySoft::initThread(
 	const SharedFD &fdParams,
 	const IPACameraSensorInfo &sensorInfo,
 	const ControlInfoMap &sensorControls,
+	const ControlInfoMap &lensControls,
 	ControlInfoMap *ipaControls,
 	bool *ccmEnabled)
 {
-	int32_t _ret = ipa_->init(settings, fdStats, fdParams, sensorInfo, sensorControls, ipaControls, ccmEnabled);
+	int32_t _ret = ipa_->init(settings, fdStats, fdParams, sensorInfo, sensorControls, lensControls, ipaControls, ccmEnabled);
 
 	proxy_.moveToThread(&thread_);
 
@@ -160,6 +167,7 @@ int32_t IPAProxySoft::initIPC(
 	const SharedFD &fdParams,
 	const IPACameraSensorInfo &sensorInfo,
 	const ControlInfoMap &sensorControls,
+	const ControlInfoMap &lensControls,
 	ControlInfoMap *ipaControls,
 	bool *ccmEnabled)
 {
@@ -190,6 +198,10 @@ int32_t IPAProxySoft::initIPC(
 	std::tie(sensorControlsBuf, std::ignore) =
 		IPADataSerializer<ControlInfoMap>::serialize(sensorControls
 , &controlSerializer_);
+	std::vector<uint8_t> lensControlsBuf;
+	std::tie(lensControlsBuf, std::ignore) =
+		IPADataSerializer<ControlInfoMap>::serialize(lensControls
+, &controlSerializer_);
 	appendPOD<uint32_t>(_ipcInputBuf.data(), settingsBuf.size());
 	appendPOD<uint32_t>(_ipcInputBuf.data(), fdStatsBuf.size());
 	appendPOD<uint32_t>(_ipcInputBuf.data(), fdStatsFds.size());
@@ -197,11 +209,13 @@ int32_t IPAProxySoft::initIPC(
 	appendPOD<uint32_t>(_ipcInputBuf.data(), fdParamsFds.size());
 	appendPOD<uint32_t>(_ipcInputBuf.data(), sensorInfoBuf.size());
 	appendPOD<uint32_t>(_ipcInputBuf.data(), sensorControlsBuf.size());
+	appendPOD<uint32_t>(_ipcInputBuf.data(), lensControlsBuf.size());
 	_ipcInputBuf.data().insert(_ipcInputBuf.data().end(), settingsBuf.begin(), settingsBuf.end());
 	_ipcInputBuf.data().insert(_ipcInputBuf.data().end(), fdStatsBuf.begin(), fdStatsBuf.end());
 	_ipcInputBuf.data().insert(_ipcInputBuf.data().end(), fdParamsBuf.begin(), fdParamsBuf.end());
 	_ipcInputBuf.data().insert(_ipcInputBuf.data().end(), sensorInfoBuf.begin(), sensorInfoBuf.end());
 	_ipcInputBuf.data().insert(_ipcInputBuf.data().end(), sensorControlsBuf.begin(), sensorControlsBuf.end());
+	_ipcInputBuf.data().insert(_ipcInputBuf.data().end(), lensControlsBuf.begin(), lensControlsBuf.end());
 	_ipcInputBuf.fds().insert(_ipcInputBuf.fds().end(), fdStatsFds.begin(), fdStatsFds.end());
 	_ipcInputBuf.fds().insert(_ipcInputBuf.fds().end(), fdParamsFds.begin(), fdParamsFds.end());
 
@@ -547,6 +561,32 @@ void IPAProxySoft::setSensorControlsIPC(
         	&controlSerializer_);
 
 	setSensorControls.emit(sensorControls);
+}
+
+void IPAProxySoft::setLensControlsThread(
+	const ControlList &lensControls)
+{
+	ASSERT(state_ != ProxyStopped);
+	setLensControls.emit(lensControls);
+}
+
+void IPAProxySoft::setLensControlsIPC(
+	[[maybe_unused]] std::vector<uint8_t>::const_iterator data,
+	[[maybe_unused]] size_t dataSize,
+	[[maybe_unused]] const std::vector<SharedFD> &fds)
+{
+
+
+	const size_t lensControlsStart = 0;
+
+
+	ControlList lensControls =
+        IPADataSerializer<ControlList>::deserialize(
+        	data + lensControlsStart,
+        	data + dataSize,
+        	&controlSerializer_);
+
+	setLensControls.emit(lensControls);
 }
 
 void IPAProxySoft::setIspParamsThread()

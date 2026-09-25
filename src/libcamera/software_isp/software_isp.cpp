@@ -13,6 +13,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <linux/v4l2-controls.h>
+
 #include <libcamera/base/log.h>
 #include <libcamera/base/thread.h>
 
@@ -20,6 +22,7 @@
 #include <libcamera/formats.h>
 #include <libcamera/stream.h>
 
+#include "libcamera/internal/camera_lens.h"
 #include "libcamera/internal/framebuffer.h"
 #include "libcamera/internal/ipa_manager.h"
 #include "libcamera/internal/software_isp/debayer_params.h"
@@ -73,11 +76,12 @@ LOG_DEFINE_CATEGORY(SoftwareIsp)
  * \param[out] ipaControls The IPA controls to update
  * handler
  */
-SoftwareIsp::SoftwareIsp(PipelineHandler *pipe, const CameraSensor *sensor,
+SoftwareIsp::SoftwareIsp(PipelineHandler *pipe, CameraSensor *sensor,
 			 ControlInfoMap *ipaControls)
 	: dmaHeap_(DmaBufAllocator::DmaBufAllocatorFlag::CmaHeap |
 		   DmaBufAllocator::DmaBufAllocatorFlag::SystemHeap |
-		   DmaBufAllocator::DmaBufAllocatorFlag::UDmaBuf)
+		   DmaBufAllocator::DmaBufAllocatorFlag::UDmaBuf),
+	  lens_(sensor->focusLens())
 {
 	/*
 	 * debayerParams_ must be initialized because the initial value is used for
@@ -145,6 +149,7 @@ SoftwareIsp::SoftwareIsp(PipelineHandler *pipe, const CameraSensor *sensor,
 			 sharedParams_.fd(),
 			 sensorInfo,
 			 sensor->controls(),
+			 lens_ ? lens_->controls() : ControlInfoMap(),
 			 ipaControls,
 			 &ccmEnabled_);
 	if (ret) {
@@ -159,6 +164,7 @@ SoftwareIsp::SoftwareIsp(PipelineHandler *pipe, const CameraSensor *sensor,
 					    metadataReady.emit(frame, metadata);
 				    });
 	ipa_->setSensorControls.connect(this, &SoftwareIsp::setSensorCtrls);
+	ipa_->setLensControls.connect(this, &SoftwareIsp::setLensCtrls);
 
 	debayer_->moveToThread(&ispWorkerThread_);
 }
@@ -362,6 +368,13 @@ void SoftwareIsp::stop()
 
 	ipa_->stop();
 
+	/*
+	 * The sensor is still streaming: let the lens driver park the lens
+	 * and power down while the lens bus still answers.
+	 */
+	if (lens_)
+		lens_->close();
+
 	for (auto buffer : queuedOutputBuffers_) {
 		FrameMetadata &metadata = buffer->_d()->metadata();
 		metadata.status = FrameMetadata::FrameCancelled;
@@ -398,6 +411,17 @@ void SoftwareIsp::saveIspParams()
 void SoftwareIsp::setSensorCtrls(const ControlList &sensorControls)
 {
 	setSensorControls.emit(sensorControls);
+}
+
+void SoftwareIsp::setLensCtrls(const ControlList &lensControls)
+{
+	if (!lens_ || !lensControls.contains(V4L2_CID_FOCUS_ABSOLUTE))
+		return;
+
+	/* Opens the lens on the first move, once the sensor is streaming. */
+	int32_t position = lensControls.get(V4L2_CID_FOCUS_ABSOLUTE).get<int32_t>();
+	if (lens_->setFocusPosition(position))
+		LOG(SoftwareIsp, Warning) << "Failed to move the lens to " << position;
 }
 
 void SoftwareIsp::statsReady(uint32_t frame, uint32_t bufferId)

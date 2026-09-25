@@ -45,8 +45,9 @@ enum class _SoftCmd {
 
 enum class _SoftEventCmd {
 	SetSensorControls = 1,
-	SetIspParams = 2,
-	MetadataReady = 3,
+	SetLensControls = 2,
+	SetIspParams = 3,
+	MetadataReady = 4,
 };
 
 
@@ -78,6 +79,7 @@ public:
 		const SharedFD &fdParams,
 		const IPACameraSensorInfo &sensorInfo,
 		const ControlInfoMap &sensorControls,
+		const ControlInfoMap &lensControls,
 		ControlInfoMap *ipaControls,
 		bool *ccmEnabled) = 0;
 
@@ -101,6 +103,8 @@ public:
 		const ControlList &sensorControls) = 0;
 
 	Signal<const ControlList &> setSensorControls;
+
+	Signal<const ControlList &> setLensControls;
 
 	Signal<> setIspParams;
 

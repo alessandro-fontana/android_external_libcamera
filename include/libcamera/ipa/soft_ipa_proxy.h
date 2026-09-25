@@ -41,6 +41,7 @@ public:
         	const SharedFD &fdParams,
         	const IPACameraSensorInfo &sensorInfo,
         	const ControlInfoMap &sensorControls,
+        	const ControlInfoMap &lensControls,
         	ControlInfoMap *ipaControls,
         	bool *ccmEnabled) override;
 
@@ -74,6 +75,7 @@ private:
         	const SharedFD &fdParams,
         	const IPACameraSensorInfo &sensorInfo,
         	const ControlInfoMap &sensorControls,
+        	const ControlInfoMap &lensControls,
         	ControlInfoMap *ipaControls,
         	bool *ccmEnabled);
         int32_t initIPC(
@@ -82,6 +84,7 @@ private:
         	const SharedFD &fdParams,
         	const IPACameraSensorInfo &sensorInfo,
         	const ControlInfoMap &sensorControls,
+        	const ControlInfoMap &lensControls,
         	ControlInfoMap *ipaControls,
         	bool *ccmEnabled);
 
@@ -121,6 +124,13 @@ private:
         void setSensorControlsThread(
         	const ControlList &sensorControls);
 	void setSensorControlsIPC(
+		std::vector<uint8_t>::const_iterator data,
+		size_t dataSize,
+		const std::vector<SharedFD> &fds);
+
+        void setLensControlsThread(
+        	const ControlList &lensControls);
+	void setLensControlsIPC(
 		std::vector<uint8_t>::const_iterator data,
 		size_t dataSize,
 		const std::vector<SharedFD> &fds);
