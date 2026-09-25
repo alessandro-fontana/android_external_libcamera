@@ -1240,12 +1240,36 @@ void CameraDevice::requestComplete(Request *request)
 	 * If the Request has failed, abort the request by notifying the error
 	 * and complete the request with all buffers in error state.
 	 */
-	if (request->status() != Request::RequestComplete) {
+	/*
+	 * A frame lost in capture (a DMA error on the receiver) completes the
+	 * request with its buffers cancelled and no timestamp. Handing it to
+	 * the framework as a result, with a zero shutter timestamp, leaves the
+	 * request in flight for ever and the next reconfiguration times out
+	 * waiting for it: report it as a failed request instead.
+	 */
+	bool frameLost = !request->metadata().get(controls::SensorTimestamp);
+	for (const auto &[stream, buffer] : request->buffers()) {
+		if (buffer->metadata().status != FrameMetadata::FrameSuccess)
+			frameLost = true;
+	}
+
+	if (request->status() != Request::RequestComplete || frameLost) {
 		LOG(HAL, Error) << "Request " << request->cookie()
 				<< " not successfully completed: "
-				<< request->status();
+				<< request->status()
+				<< (frameLost ? " (frame lost)" : "");
 
 		abortRequest(descriptor);
+
+		/* Nothing will post-process them: give the internal buffers back. */
+		for (auto &buffer : descriptor->buffers_) {
+			if (buffer.internalBuffer) {
+				buffer.stream->putBuffer(buffer.internalBuffer);
+				buffer.internalBuffer = nullptr;
+			}
+		}
+		descriptor->pendingStreamsToProcess_.clear();
+
 		completeDescriptor(descriptor);
 
 		return;

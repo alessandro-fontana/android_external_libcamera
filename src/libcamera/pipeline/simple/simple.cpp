@@ -35,6 +35,7 @@
 #include "libcamera/internal/converter.h"
 #include "libcamera/internal/delayed_controls.h"
 #include "libcamera/internal/device_enumerator.h"
+#include "libcamera/internal/framebuffer.h"
 #include "libcamera/internal/media_device.h"
 #include "libcamera/internal/pipeline_handler.h"
 #include "libcamera/internal/software_isp/software_isp.h"
@@ -881,8 +882,11 @@ void SimpleCameraData::imageBufferReady(FrameBuffer *buffer)
 			return;
 
 		const RequestOutputs &outputs = conversionQueue_.front();
-		for (auto &[stream, buf] : outputs.outputs)
+		for (auto &[stream, buf] : outputs.outputs) {
+			/* The output was never written: say so to the application. */
+			buf->_d()->cancel();
 			pipe->completeBuffer(outputs.request, buf);
+		}
 		SimpleFrameInfo *info = frameInfo_.find(outputs.request->sequence());
 		if (info)
 			info->metadataRequired = false;
