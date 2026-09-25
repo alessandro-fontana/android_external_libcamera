@@ -73,7 +73,50 @@ int CameraLens::init()
 		return ret;
 
 	model_ = subdev_->model();
+
+	/*
+	 * An open lens subdev keeps the driver powered, and on some modules
+	 * the lens driver only answers while the sensor is powered as well:
+	 * keep it closed until a user needs it, see open().
+	 */
+	subdev_->close();
+
 	return 0;
+}
+
+/**
+ * \brief Open the lens subdev to move the lens
+ *
+ * The lens is closed after init(), to leave the lens driver powered down
+ * while the camera is idle. setFocusPosition() opens it when needed; a user
+ * that wants to control when the lens powers up opens it explicitly, once
+ * the sensor is streaming, and closes it before stopping the sensor.
+ *
+ * \return 0 on success or a negative error code otherwise
+ */
+int CameraLens::open()
+{
+	if (subdev_->isOpen())
+		return 0;
+
+	return subdev_->open();
+}
+
+/**
+ * \brief Close the lens subdev, letting the lens driver power down
+ */
+void CameraLens::close()
+{
+	subdev_->close();
+}
+
+/**
+ * \brief Check if the lens subdev is open
+ * \return True if the lens can be moved
+ */
+bool CameraLens::isOpen() const
+{
+	return subdev_->isOpen();
 }
 
 /**
@@ -86,6 +129,10 @@ int CameraLens::init()
  */
 int CameraLens::setFocusPosition(int32_t position)
 {
+	int ret = open();
+	if (ret)
+		return ret;
+
 	ControlList lensCtrls(subdev_->controls());
 	lensCtrls.set(V4L2_CID_FOCUS_ABSOLUTE, static_cast<int32_t>(position));
 
