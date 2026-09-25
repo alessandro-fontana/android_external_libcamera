@@ -522,6 +522,19 @@ public:
 };
 REGISTER_CAMERA_SENSOR_HELPER("sr259", CameraSensorHelperSr259)
 
+class CameraSensorHelperS5k4h5yc : public CameraSensorHelper
+{
+public:
+	CameraSensorHelperS5k4h5yc()
+	{
+		/* SMIA pedestal, 64 at 10 bits. */
+		blackLevel_ = 4096;
+		/* Analogue gain code in 1/32 steps (vendor driver). */
+		gain_ = AnalogueGainLinear{ 1, 0, 0, 32 };
+	}
+};
+REGISTER_CAMERA_SENSOR_HELPER("s5k4h5yc", CameraSensorHelperS5k4h5yc)
+
 class CameraSensorHelperImx219 : public CameraSensorHelper
 {
 public:
