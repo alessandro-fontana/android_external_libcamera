@@ -127,7 +127,14 @@ int V4L2Device::setFd(UniqueFD fd)
 	fdEventNotifier_->activated.connect(this, &V4L2Device::eventAvailable);
 	fdEventNotifier_->setEnabled(false);
 
-	listControls();
+	/*
+	 * The controls of a device do not change when it is reopened. Listing
+	 * them again would create new ControlId instances, and the
+	 * ControlInfoMap copies held by users (keyed by the old ones) would
+	 * stop matching the device's id map.
+	 */
+	if (controlIds_.empty())
+		listControls();
 
 	return 0;
 }
