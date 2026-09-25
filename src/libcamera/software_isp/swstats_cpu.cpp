@@ -199,6 +199,9 @@ void SwStatsCpu::statsBGGR10Line0(const uint8_t *src[])
 	if (swapLines_)
 		std::swap(src0, src1);
 
+	const bool focus = currentY_ >= static_cast<unsigned int>(focusWindow_.y) &&
+			   currentY_ < focusWindow_.y + focusWindow_.height;
+
 	/* x += 4 sample every other 2x2 block */
 	for (unsigned int x = 0; x < window_.width; x += 4) {
 		b = src0[x];
@@ -208,11 +211,43 @@ void SwStatsCpu::statsBGGR10Line0(const uint8_t *src[])
 
 		g = (g + g2) / 2;
 
+		if (focus)
+			focusLine(x, g);
+
 		/* divide Y by 4 for 10 -> 8 bpp value */
 		SWSTATS_ACCUMULATE_LINE_STATS(4)
 	}
 
+	if (focus)
+		focusPrevValid_ = true;
+
 	SWSTATS_FINISH_LINE_STATS()
+}
+
+/*
+ * Contrast for the autofocus: absolute green differences between a sample
+ * and its left and upper neighbours (4 pixels apart), in the focus window.
+ */
+void SwStatsCpu::focusLine(unsigned int x, unsigned int g)
+{
+	if (x < static_cast<unsigned int>(focusWindow_.x) ||
+	    x >= focusWindow_.x + focusWindow_.width)
+		return;
+
+	unsigned int i = (x - focusWindow_.x) / 4;
+	if (i >= focusPrev_.size())
+		return;
+
+	if (i)
+		stats_.sharpness += std::abs(static_cast<int>(g) -
+					     static_cast<int>(focusLeft_));
+	if (focusPrevValid_)
+		stats_.sharpness += std::abs(static_cast<int>(g) -
+					     static_cast<int>(focusPrev_[i]));
+
+	focusLeft_ = g;
+	focusPrev_[i] = g;
+	stats_.sharpnessBase += g;
 }
 
 void SwStatsCpu::statsBGGR12Line0(const uint8_t *src[])
@@ -307,6 +342,9 @@ void SwStatsCpu::startFrame(void)
 	stats_.sumB_ = 0;
 	stats_.sumG_ = 0;
 	stats_.yHistogram.fill(0);
+	stats_.sharpness = 0;
+	stats_.sharpnessBase = 0;
+	focusPrevValid_ = false;
 }
 
 /**
@@ -429,6 +467,13 @@ void SwStatsCpu::setWindow(const Rectangle &window)
 	window_.width -= xShift_;
 	window_.width &= ~(patternSize_.width - 1);
 	window_.height &= ~(patternSize_.height - 1);
+
+	/* x and width in multiples of 4: the sampling step of the stats */
+	focusWindow_.x = (window_.width / 3) & ~3u;
+	focusWindow_.y = window_.y + window_.height / 3;
+	focusWindow_.width = (window_.width / 3) & ~3u;
+	focusWindow_.height = window_.height / 3;
+	focusPrev_.assign(focusWindow_.width / 4, 0);
 }
 
 } /* namespace libcamera */

@@ -44,6 +44,16 @@ struct SwIspStats {
 	 * \brief A histogram of luminance values
 	 */
 	Histogram yHistogram;
+	/**
+	 * \brief Sum of the green differences between neighbouring samples in
+	 * the focus window, horizontally and vertically (contrast autofocus)
+	 */
+	uint64_t sharpness;
+	/**
+	 * \brief Sum of the green samples in the focus window, to make the
+	 * sharpness independent of the exposure
+	 */
+	uint64_t sharpnessBase;
 };
 
 } /* namespace libcamera */

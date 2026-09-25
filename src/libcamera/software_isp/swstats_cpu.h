@@ -12,6 +12,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <vector>
 
 #include <libcamera/base/signal.h>
 
@@ -49,6 +50,7 @@ public:
 		    y >= (window_.y + window_.height))
 			return;
 
+		currentY_ = y;
 		(this->*stats0_)(src);
 	}
 
@@ -76,6 +78,7 @@ private:
 	/* Bayer 10 bpp packed */
 	void statsBGGR10PLine0(const uint8_t *src[]);
 	void statsGBRG10PLine0(const uint8_t *src[]);
+	void focusLine(unsigned int x, unsigned int g);
 
 	/* Variables set by configure(), used every line */
 	statsProcessFn stats0_;
@@ -85,6 +88,14 @@ private:
 	unsigned int ySkipMask_;
 
 	Rectangle window_;
+
+	/* The focus window, the central ninth of window_ */
+	Rectangle focusWindow_;
+	unsigned int currentY_;
+	unsigned int focusLeft_;
+	/* Green samples of the previous sampled line in the focus window */
+	std::vector<uint16_t> focusPrev_;
+	bool focusPrevValid_;
 
 	Size patternSize_;
 
