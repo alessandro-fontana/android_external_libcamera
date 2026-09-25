@@ -302,6 +302,15 @@ bool IPAManager::isSignatureValid([[maybe_unused]] IPAModule *ipa) const
 		<< (valid ? "valid" : "not valid");
 
 	return valid;
+#elif defined(__ANDROID__)
+	/*
+	 * Without a signing key every module would run isolated, in a proxy
+	 * worker that the Android build does not install. On Android the
+	 * modules come from the same build as libcamera and are installed in
+	 * a read-only, verified location: trust those in IPA_MODULE_DIR, and
+	 * only those.
+	 */
+	return ipa->path().rfind(IPA_MODULE_DIR "/", 0) == 0;
 #else
 	return false;
 #endif

@@ -33,6 +33,10 @@ cc_library_shared {
         "libhardware_headers",
     ],
 
+    // As in AOSP's external/libcamera.
+    static_libs: [
+        "libyuv_static",
+    ],
     shared_libs: [
         "libcamera_metadata",
         "libcutils",
@@ -43,8 +47,6 @@ cc_library_shared {
         "libexif",
         "libjpeg",
         "libcamera",
-        "libyaml",
-        "libyuv_chromium",
         "libdl",
         "libui",
     ],

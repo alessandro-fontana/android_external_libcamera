@@ -80,6 +80,9 @@ apex {
     binaries: [
         "android.hardware.camera.provider-V1-libcamera-service",
     ],
+    native_shared_libs: [
+        "ipa_soft_simple",
+    ],
     prebuilts: [
         "android.hardware.camera.libcamera.xml",
         "android.hardware.camera.libcamera.rc",

@@ -1,0 +1,4 @@
+filegroup {
+    name: "libcamera_libipa_srcs",
+    srcs: ["*.cpp"],
+}

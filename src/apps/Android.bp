@@ -2,33 +2,4 @@
 // Copyright (C) 2020 Baylibre Inc.
 //
 
-cc_binary {
-    name: "cam",
-    vendor: true,
-    cppflags: [
-        "-DHAVE_KMS",
-    ],
-    srcs: [
-        "cam/camera_session.cpp",
-        "cam/capture_script.cpp",
-        "cam/file_sink.cpp",
-        "cam/frame_sink.cpp",
-        "cam/main.cpp",
-        "cam/drm.cpp",
-        "cam/kms_sink.cpp",
-        "common/image.cpp",
-        "common/options.cpp",
-        "common/stream_options.cpp",
-        "common/event_loop.cpp",
-        "common/ppm_writer.cpp",
-    ],
-    header_libs: [
-        "libcamera_includes",
-    ],
-    shared_libs: [
-        "libevent",
-        "libdrm",
-        "libcamera",
-        "libyaml"
-    ],
-}
+// cam is defined in the root Android.bp (libyaml visibility).

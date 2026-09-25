@@ -509,6 +509,19 @@ public:
 };
 REGISTER_CAMERA_SENSOR_HELPER("imx214", CameraSensorHelperImx214)
 
+class CameraSensorHelperSr259 : public CameraSensorHelper
+{
+public:
+	CameraSensorHelperSr259()
+	{
+		/* Black level measured in the dark: 64 at 10 bits. */
+		blackLevel_ = 4096;
+		/* The driver exposes a linear gain in 1/16 steps. */
+		gain_ = AnalogueGainLinear{ 1, 0, 0, 16 };
+	}
+};
+REGISTER_CAMERA_SENSOR_HELPER("sr259", CameraSensorHelperSr259)
+
 class CameraSensorHelperImx219 : public CameraSensorHelper
 {
 public:

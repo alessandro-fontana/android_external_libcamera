@@ -1,0 +1,44 @@
+//
+// The IPA module of the software ISP: without it IPAManager::createIPA()
+// fails and the software ISP cannot be used with raw Bayer sensors.
+//
+
+cc_library_shared {
+    name: "ipa_soft_simple",
+    vendor: true,
+    // IPA_MODULE_DIR: lib64/libcamera inside the provider APEX
+    relative_install_path: "libcamera",
+    defaults: [
+        "libcamera_default_flags",
+    ],
+    cppflags: [
+        "-Wno-shadow",
+    ],
+    srcs: [
+        "ipa_context.cpp",
+        "soft_simple.cpp",
+        "algorithms/*.cpp",
+        ":libcamera_libipa_srcs",
+    ],
+    include_dirs: [
+        "external/libcamera/src/ipa",
+        "external/libcamera/src/ipa/simple",
+        "external/libcamera/include/libcamera/ipa",
+        "external/libcamera/include/libcamera",
+    ],
+    header_libs: [
+        "libcamera_includes",
+    ],
+    shared_libs: [
+        "libcamera",
+    ],
+}
+
+prebuilt_etc {
+    name: "libcamera_ipa_simple_uncalibrated.yaml",
+    vendor: true,
+    src: "data/uncalibrated.yaml",
+    filename: "uncalibrated.yaml",
+    // IPA_CONFIG_DIR/<ipa name>/
+    relative_install_path: "libcamera/ipa/simple",
+}
