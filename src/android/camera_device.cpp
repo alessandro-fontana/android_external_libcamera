@@ -714,6 +714,30 @@ int CameraDevice::configureStreams(camera3_stream_configuration_t *stream_list)
 		}
 
 		/*
+		 * A software ISP has a single output (see above): a JPEG of
+		 * another size is encoded from the largest stream, cropped and
+		 * scaled by the JPEG post-processor, instead of asking the
+		 * pipeline for a second stream it would drop.
+		 */
+		if (index < 0 && !streamConfigs.empty() &&
+		    capabilities_.needConversion(HAL_PIXEL_FORMAT_YCbCr_420_888)) {
+			auto largest = std::max_element(
+				streamConfigs.begin(), streamConfigs.end(),
+				[](const Camera3StreamConfig &a, const Camera3StreamConfig &b) {
+					return a.config.size.width * a.config.size.height <
+					       b.config.size.width * b.config.size.height;
+				});
+			index = largest - streamConfigs.begin();
+			type = CameraStream::Type::Mapped;
+			largest->streams[0].stream->usage |= GRALLOC_USAGE_SW_READ_OFTEN;
+
+			LOG(HAL, Info)
+				<< "JPEG " << jpegStream->width << "x"
+				<< jpegStream->height << " derived from "
+				<< largest->config.size;
+		}
+
+		/*
 		 * Without a compatible match for JPEG encoding we must
 		 * introduce a new stream to satisfy the request requirements.
 		 */

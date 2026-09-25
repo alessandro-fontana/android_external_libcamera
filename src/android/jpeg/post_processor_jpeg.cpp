@@ -23,6 +23,10 @@
 
 #include <libcamera/formats.h>
 
+#include <libyuv/scale_argb.h>
+
+#include "libcamera/internal/mapped_framebuffer.h"
+
 using namespace libcamera;
 using namespace std::chrono_literals;
 
@@ -36,10 +40,17 @@ PostProcessorJpeg::PostProcessorJpeg(CameraDevice *const device)
 int PostProcessorJpeg::configure(const StreamConfiguration &inCfg,
 				 const StreamConfiguration &outCfg)
 {
-	if (inCfg.size != outCfg.size) {
+	/*
+	 * An XRGB source (software ISP) of another size is cropped to the
+	 * JPEG aspect ratio and scaled, then encoded from a temporary buffer.
+	 */
+	scale_ = inCfg.size != outCfg.size;
+	if (scale_ && inCfg.pixelFormat != formats::XRGB8888) {
 		LOG(JPEG, Error) << "Mismatch of input and output stream sizes";
 		return -EINVAL;
 	}
+	sourceSize_ = inCfg.size;
+	sourceStride_ = inCfg.stride ? inCfg.stride : inCfg.size.width * 4;
 
 	if (outCfg.pixelFormat != formats::MJPEG) {
 		LOG(JPEG, Error) << "Output stream pixel format is not JPEG";
@@ -56,7 +67,19 @@ int PostProcessorJpeg::configure(const StreamConfiguration &inCfg,
 	encoder_ = std::make_unique<EncoderLibJpeg>();
 #endif
 
-	return encoder_->configure(inCfg);
+	if (!scale_)
+		return encoder_->configure(inCfg);
+
+#if defined(OS_CHROMEOS)
+	LOG(JPEG, Error) << "Scaling is not supported by the JEA encoder";
+	return -EINVAL;
+#else
+	StreamConfiguration encCfg = inCfg;
+	encCfg.size = outCfg.size;
+	encCfg.stride = outCfg.size.width * 4;
+	scaled_.resize(static_cast<size_t>(encCfg.stride) * outCfg.size.height);
+	return encoder_->configure(encCfg);
+#endif
 }
 
 void PostProcessorJpeg::generateThumbnail(const FrameBuffer &source,
@@ -105,6 +128,46 @@ void PostProcessorJpeg::generateThumbnail(const FrameBuffer &source,
 			<< jpeg_size << " bytes";
 	}
 }
+
+#if !defined(OS_CHROMEOS)
+int PostProcessorJpeg::encodeScaled(Camera3RequestDescriptor::StreamBuffer *streamBuffer,
+				    Span<const uint8_t> exifData, unsigned int quality)
+{
+	MappedFrameBuffer frame(streamBuffer->srcBuffer,
+				MappedFrameBuffer::MapFlag::Read);
+	if (!frame.isValid()) {
+		LOG(JPEG, Error) << "Failed to map FrameBuffer : "
+				 << strerror(frame.error());
+		return frame.error();
+	}
+
+	const unsigned int sw = sourceSize_.width;
+	const unsigned int sh = sourceSize_.height;
+	const unsigned int dw = streamSize_.width;
+	const unsigned int dh = streamSize_.height;
+
+	/* Crop the centre to the JPEG aspect ratio. */
+	unsigned int cw = sw, ch = sh;
+	if (static_cast<uint64_t>(sw) * dh > static_cast<uint64_t>(sh) * dw)
+		cw = (sh * dw / dh) & ~1u;
+	else
+		ch = (sw * dh / dw) & ~1u;
+
+	const uint8_t *crop = frame.planes()[0].data() +
+			      ((sh - ch) / 2) * sourceStride_ + ((sw - cw) / 2) * 4;
+	int ret = libyuv::ARGBScale(crop, sourceStride_, cw, ch,
+				    scaled_.data(), dw * 4, dw, dh,
+				    libyuv::FilterMode::kFilterBilinear);
+	if (ret) {
+		LOG(JPEG, Error) << "Failed to scale the JPEG source: " << ret;
+		return -EINVAL;
+	}
+
+	std::vector<Span<uint8_t>> planes{ { scaled_.data(), scaled_.size() } };
+	return static_cast<EncoderLibJpeg *>(encoder_.get())
+		->encode(planes, streamBuffer->dstBuffer->plane(0), exifData, quality);
+}
+#endif
 
 void PostProcessorJpeg::process(Camera3RequestDescriptor::StreamBuffer *streamBuffer)
 {
@@ -202,7 +265,13 @@ void PostProcessorJpeg::process(Camera3RequestDescriptor::StreamBuffer *streamBu
 	const uint8_t quality = ret ? *entry.data.u8 : 95;
 	resultMetadata->addEntry(ANDROID_JPEG_QUALITY, quality);
 
-	int jpeg_size = encoder_->encode(streamBuffer, exif.data(), quality);
+	int jpeg_size;
+#if !defined(OS_CHROMEOS)
+	if (scale_) {
+		jpeg_size = encodeScaled(streamBuffer, exif.data(), quality);
+	} else
+#endif
+		jpeg_size = encoder_->encode(streamBuffer, exif.data(), quality);
 	if (jpeg_size < 0) {
 		LOG(JPEG, Error) << "Failed to encode stream image";
 		processComplete.emit(streamBuffer, PostProcessor::Status::Error);
