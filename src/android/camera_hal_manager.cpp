@@ -7,6 +7,8 @@
 
 #include "camera_hal_manager.h"
 
+#include <algorithm>
+
 #include <libcamera/base/log.h>
 
 #include <libcamera/camera.h>
@@ -175,11 +177,28 @@ void CameraHalManager::cameraAdded(std::shared_ptr<Camera> cam)
 		 * Now check if this is an external camera and assign
 		 * its id accordingly.
 		 */
-		if (cameraLocation(cam.get()) == properties::CameraLocationExternal) {
+		int32_t location = cameraLocation(cam.get());
+		if (location == properties::CameraLocationExternal) {
 			isCameraExternal = true;
 			id = nextExternalCameraId_;
 		} else {
-			id = numInternalCameras_;
+			/*
+			 * The enumeration order of the cameras is not stable
+			 * across boots, and Android expects stable ids, the
+			 * back camera being 0 by convention: prefer 0 for the
+			 * back and 1 for the front, else the first free id.
+			 */
+			auto used = [&](unsigned int i) {
+				return std::any_of(cameraIdsMap_.begin(), cameraIdsMap_.end(),
+						   [i](const auto &e) { return e.second == i; });
+			};
+			unsigned int preferred = location == properties::CameraLocationFront ? 1 : 0;
+			id = preferred;
+			if (used(id)) {
+				id = 0;
+				while (used(id))
+					id++;
+			}
 		}
 	}
 
