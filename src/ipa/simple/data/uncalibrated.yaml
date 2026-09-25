@@ -16,4 +16,6 @@ algorithms:
   #                0, 0, 1]
   - Lut:
   - Agc:
+  # Contrast autofocus: does nothing without a lens.
+  - Af:
 ...

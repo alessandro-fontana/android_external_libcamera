@@ -55,6 +55,7 @@ public:
 		 const SharedFD &fdParams,
 		 const IPACameraSensorInfo &sensorInfo,
 		 const ControlInfoMap &sensorControls,
+		 const ControlInfoMap &lensControls,
 		 ControlInfoMap *ipaControls,
 		 bool *ccmEnabled) override;
 	int configure(const IPAConfigInfo &configInfo) override;
@@ -77,6 +78,7 @@ private:
 	SwIspStats *stats_;
 	std::unique_ptr<CameraSensorHelper> camHelper_;
 	ControlInfoMap sensorInfoMap_;
+	ControlInfoMap lensInfoMap_;
 
 	/* Local parameter storage */
 	struct IPAContext context_;
@@ -95,9 +97,12 @@ int IPASoftSimple::init(const IPASettings &settings,
 			const SharedFD &fdParams,
 			const IPACameraSensorInfo &sensorInfo,
 			const ControlInfoMap &sensorControls,
+			const ControlInfoMap &lensControls,
 			ControlInfoMap *ipaControls,
 			bool *ccmEnabled)
 {
+	lensInfoMap_ = lensControls;
+
 	camHelper_ = CameraSensorHelperFactoryBase::create(settings.sensorModel);
 	if (!camHelper_) {
 		LOG(IPASoft, Warning)
@@ -204,6 +209,13 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
 	context_.configuration = {};
 	context_.activeState = {};
 	context_.frameContexts.clear();
+
+	const auto focus = lensInfoMap_.find(V4L2_CID_FOCUS_ABSOLUTE);
+	if (focus != lensInfoMap_.end()) {
+		context_.configuration.af.enabled = true;
+		context_.configuration.af.min = focus->second.min().get<int32_t>();
+		context_.configuration.af.max = focus->second.max().get<int32_t>();
+	}
 
 	context_.configuration.agc.lineDuration =
 		context_.sensorInfo.minLineLength * 1.0s / context_.sensorInfo.pixelRate;
@@ -312,6 +324,15 @@ void IPASoftSimple::processStats(const uint32_t frame,
 	for (auto const &algo : algorithms())
 		algo->process(context_, frame, frameContext, stats_, metadata);
 	metadataReady.emit(frame, metadata);
+
+	if (context_.activeState.af.changed) {
+		context_.activeState.af.changed = false;
+
+		ControlList lensCtrls(lensInfoMap_);
+		lensCtrls.set(V4L2_CID_FOCUS_ABSOLUTE,
+			      context_.activeState.af.position);
+		setLensControls.emit(lensCtrls);
+	}
 
 	/* Sanity check */
 	if (!sensorControls.contains(V4L2_CID_EXPOSURE) ||

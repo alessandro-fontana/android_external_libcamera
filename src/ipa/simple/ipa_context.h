@@ -24,6 +24,11 @@ namespace libcamera {
 
 namespace ipa::soft {
 
+struct AfConfiguration {
+	bool enabled;
+	int32_t min, max;
+};
+
 struct IPASessionConfiguration {
 	float gamma;
 	struct {
@@ -34,9 +39,15 @@ struct IPASessionConfiguration {
 	struct {
 		std::optional<uint8_t> level;
 	} black;
+	AfConfiguration af;
 };
 
 struct IPAActiveState {
+	struct {
+		int32_t position;
+		bool changed;
+	} af;
+
 	struct {
 		uint8_t level;
 		int32_t lastExposure;
