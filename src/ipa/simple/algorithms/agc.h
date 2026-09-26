@@ -29,6 +29,8 @@ public:
 private:
 	void updateExposure(IPAContext &context, IPAFrameContext &frameContext,
 			    double exposureMSV, double saturated);
+	void split(const IPAContext &context, double total,
+		   int32_t &exposure, double &gain) const;
 
 	/* The last exposure and gain asked for, and frames spent waiting for them. */
 	bool pending_;
@@ -43,6 +45,8 @@ private:
 	double saturatedMin_;
 	/* How much brighter a pixel binned by two is, from the tuning file */
 	double binningGain_ = 1.0;
+	/* Mains flicker period to keep the exposure a multiple of, 0 = off */
+	utils::Duration flickerPeriod_;
 };
 
 } /* namespace ipa::soft::algorithms */

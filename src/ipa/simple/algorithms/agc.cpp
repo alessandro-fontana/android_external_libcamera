@@ -20,6 +20,8 @@ namespace libcamera {
 
 LOG_DEFINE_CATEGORY(IPASoftExposure)
 
+using namespace std::literals::chrono_literals;
+
 namespace ipa::soft::algorithms {
 
 /*
@@ -55,6 +57,12 @@ static constexpr float kExposureMSVMinDefault = 1.6;
  */
 static constexpr unsigned int kMaxWait = 8;
 
+/*
+ * Lamps on 50 Hz mains flicker at 100 Hz: an exposure that is not a
+ * multiple of 10 ms shows it as bands rolling through the image.
+ */
+static constexpr unsigned int kFlickerPeriodDefault = 10000;
+
 Agc::Agc()
 	: pending_(false), exposureReq_(0), gainReq_(0), waited_(0),
 	  target_(kExposureOptimal), msvMin_(kExposureMSVMinDefault),
@@ -69,7 +77,35 @@ int Agc::init([[maybe_unused]] IPAContext &context, const YamlObject &tuningData
 	saturatedMax_ = tuningData["saturatedMax"].get<double>(kSaturatedMaxDefault);
 	saturatedMin_ = saturatedMax_ / 2;
 	binningGain_ = tuningData["binningGain"].get<double>(1.0);
+	flickerPeriod_ = tuningData["flickerPeriod"].get<unsigned int>(kFlickerPeriodDefault) * 1us;
 	return 0;
+}
+
+/*
+ * Split the product of exposure (in lines) and gain into the two: exposure
+ * first, gain only for what the exposure cannot give. Longer than the
+ * flicker period, the exposure goes down to a multiple of it and the gain
+ * makes up the rest, unless the gain would run out: then banding is
+ * better than a dark image.
+ */
+void Agc::split(const IPAContext &context, double total,
+		int32_t &exposure, double &gain) const
+{
+	const auto &agc = context.configuration.agc;
+
+	exposure = std::clamp(static_cast<int32_t>(std::lround(total / agc.againMin)),
+			      agc.exposureMin, agc.exposureMax);
+
+	utils::Duration time = exposure * agc.lineDuration;
+	if (flickerPeriod_ > 0us && time >= flickerPeriod_) {
+		double periods = std::floor(time / flickerPeriod_);
+		int32_t lines = std::max(static_cast<int32_t>(periods * (flickerPeriod_ / agc.lineDuration)),
+					 agc.exposureMin);
+		if (total / lines <= agc.againMax)
+			exposure = lines;
+	}
+
+	gain = std::clamp(total / exposure, agc.againMin, agc.againMax);
 }
 
 int Agc::configure(IPAContext &context, const IPAConfigInfo &configInfo)
@@ -107,20 +143,13 @@ int Agc::configure(IPAContext &context, const IPAConfigInfo &configInfo)
 		       std::pow(binningGain_, std::log2(static_cast<double>(from) / agc.bin));
 	}
 
-	if (gain > cfg.againMax) {
-		time = time * (gain / cfg.againMax);
-		gain = cfg.againMax;
-	} else if (gain < cfg.againMin) {
-		time = time * (gain / cfg.againMin);
-		gain = cfg.againMin;
-	}
-
-	int32_t lines = std::clamp(static_cast<int32_t>(std::lround(time / cfg.lineDuration)),
-				   cfg.exposureMin, cfg.exposureMax);
-	if (lines == cfg.exposureMax && time > lines * cfg.lineDuration)
+	double total = time / cfg.lineDuration * gain;
+	int32_t lines;
+	split(context, total, lines, gain);
+	if (lines * gain < total * 0.99)
 		LOG(IPASoftExposure, Debug)
 			<< "Mode " << agc.bin << "x underexposed by "
-			<< time / (lines * cfg.lineDuration);
+			<< total / (lines * gain);
 
 	agc.initialExposure = lines;
 	agc.initialGain = gain;
@@ -136,7 +165,6 @@ int Agc::configure(IPAContext &context, const IPAConfigInfo &configInfo)
 void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
 			 double exposureMSV, double saturated)
 {
-	const auto &agc = context.configuration.agc;
 	int32_t &exposure = frameContext.sensor.exposure;
 	double &again = frameContext.sensor.gain;
 
@@ -187,11 +215,10 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
 	else
 		factor = std::clamp(std::sqrt(target_ / exposureMSV), 0.6, 1.6);
 
-	/* Exposure first, gain only for what the exposure cannot give. */
 	double total = exposure * again * factor;
-	int32_t nextExposure = std::clamp(static_cast<int32_t>(std::lround(total / agc.againMin)),
-					  agc.exposureMin, agc.exposureMax);
-	double nextGain = std::clamp(total / nextExposure, agc.againMin, agc.againMax);
+	int32_t nextExposure;
+	double nextGain;
+	split(context, total, nextExposure, nextGain);
 
 	LOG(IPASoftExposure, Debug)
 		<< "exposureMSV " << exposureMSV << " factor " << factor
