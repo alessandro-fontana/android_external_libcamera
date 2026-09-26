@@ -329,7 +329,7 @@ public:
 	std::list<Entity> entities_;
 	std::unique_ptr<CameraSensor> sensor_;
 	V4L2VideoDevice *video_;
-	V4L2Subdevice *frameStartEmitter_;
+	V4L2Device *frameStartEmitter_;
 
 	std::vector<Configuration> configs_;
 	std::map<PixelFormat, std::vector<const Configuration *>> formats_;
@@ -658,6 +658,16 @@ int SimpleCameraData::init()
 			<< entity.entity->name() << "'";
 		frameStartEmitter_ = sd;
 		break;
+	}
+
+	/*
+	 * Receivers without a subdev, such as the Exynos7870 CSIS, may signal
+	 * the frame start on the capture video node.
+	 */
+	if (!frameStartEmitter_ && video_->supportsFrameStartEvent()) {
+		LOG(SimplePipeline, Debug)
+			<< "Using frameStart signal from the video node";
+		frameStartEmitter_ = video_;
 	}
 
 	return 0;
@@ -1440,7 +1450,7 @@ int SimplePipelineHandler::start(Camera *camera, [[maybe_unused]] const ControlL
 {
 	SimpleCameraData *data = cameraData(camera);
 	V4L2VideoDevice *video = data->video_;
-	V4L2Subdevice *frameStartEmitter = data->frameStartEmitter_;
+	V4L2Device *frameStartEmitter = data->frameStartEmitter_;
 	int ret;
 
 	const MediaPad *pad = acquirePipeline(data);
@@ -1512,7 +1522,7 @@ void SimplePipelineHandler::stopDevice(Camera *camera)
 {
 	SimpleCameraData *data = cameraData(camera);
 	V4L2VideoDevice *video = data->video_;
-	V4L2Subdevice *frameStartEmitter = data->frameStartEmitter_;
+	V4L2Device *frameStartEmitter = data->frameStartEmitter_;
 
 	if (frameStartEmitter) {
 		frameStartEmitter->setFrameStartEnabled(false);
