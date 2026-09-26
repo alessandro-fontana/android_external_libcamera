@@ -419,12 +419,15 @@ void CameraCapabilities::computeHwLevel(
 }
 
 int CameraCapabilities::initialize(std::shared_ptr<Camera> camera,
-				   int orientation, int facing, bool hasFlash)
+				   int orientation, int facing, bool hasFlash,
+				   const Size &maxStreamSize)
 {
 	camera_ = camera;
 	orientation_ = orientation;
 	facing_ = facing;
 	hasFlash_ = hasFlash;
+	maxStreamSize_ = maxStreamSize;
+	stillSizes_.clear();
 	rawStreamAvailable_ = false;
 	maxFrameDuration_ = 0;
 
@@ -520,8 +523,16 @@ int CameraCapabilities::initializeStreamConfigurations()
 	 * \todo JPEG - Adjust the maximum available resolution by taking the
 	 * JPEG encoder requirements into account (alignment and aspect ratio).
 	 */
-	const Size maxRes = cfg.size;
-	LOG(HAL, Debug) << "Maximum supported resolution: " << maxRes;
+	/*
+	 * Streams stay within max_stream_size, when the configuration file
+	 * sets it: the sensor's binned mode, for preview and video. The full
+	 * resolution is offered as JPEG only (see the still sizes below).
+	 */
+	const Size fullRes = cfg.size;
+	const Size maxRes = maxStreamSize_.isNull() ? fullRes
+						   : fullRes.boundedTo(maxStreamSize_);
+	LOG(HAL, Debug) << "Maximum supported resolution: " << maxRes
+			<< " (sensor " << fullRes << ")";
 
 	/*
 	 * Build the list of supported image resolutions.
@@ -559,6 +570,13 @@ int CameraCapabilities::initializeStreamConfigurations()
 	std::sort(cameraResolutions.begin(), cameraResolutions.end());
 	auto last = std::unique(cameraResolutions.begin(), cameraResolutions.end());
 	cameraResolutions.erase(last, cameraResolutions.end());
+	cameraResolutions.erase(std::remove_if(cameraResolutions.begin(),
+					       cameraResolutions.end(),
+					       [&](const Size &res) {
+						       return res.width > maxRes.width ||
+							      res.height > maxRes.height;
+					       }),
+				cameraResolutions.end());
 
 	/*
 	 * Build the list of supported camera formats.
@@ -860,6 +878,38 @@ int CameraCapabilities::initializeStreamConfigurations()
 		 * encoder giving the maximum frame size required.
 		 */
 		maxJpegBufferSize_ = maxJpegSize.width * maxJpegSize.height * 1.5;
+	}
+
+	/*
+	 * Full resolution stills, 4:3 and 16:9, when the streams are limited
+	 * below the sensor: only the sizes the camera takes as they are.
+	 */
+	if (maxRes != fullRes && formatsMap_.count(HAL_PIXEL_FORMAT_YCbCr_420_888)) {
+		stillFormat_ = formatsMap_[HAL_PIXEL_FORMAT_YCbCr_420_888];
+		const unsigned int width = fullRes.width & ~15u;
+		for (const Size &size : { Size(width, width * 3 / 4),
+					   Size(width, width * 9 / 16) }) {
+			if (size.height > fullRes.height)
+				continue;
+
+			std::unique_ptr<CameraConfiguration> still =
+				camera_->generateConfiguration({ StreamRole::StillCapture });
+			still->at(0).pixelFormat = stillFormat_;
+			still->at(0).size = size;
+			if (still->validate() != CameraConfiguration::Valid) {
+				LOG(HAL, Debug) << "No still capture at " << size;
+				continue;
+			}
+
+			/* About a second: the sensor switches mode and back. */
+			streamConfigurations_.push_back({
+				size, HAL_PIXEL_FORMAT_BLOB, 1000000000, maxFrameDuration_,
+			});
+			stillSizes_.push_back(size);
+			maxJpegBufferSize_ = std::max<unsigned int>(maxJpegBufferSize_,
+								    size.width * size.height * 1.5);
+			LOG(HAL, Info) << "Still capture at " << size;
+		}
 	}
 
 	LOG(HAL, Debug) << "Collected stream configuration map: ";
@@ -1636,6 +1686,11 @@ bool CameraCapabilities::needConversion(int format) const
 		return false;
 
 	return true;
+}
+
+bool CameraCapabilities::isStillSize(const Size &size) const
+{
+	return std::find(stillSizes_.begin(), stillSizes_.end(), size) != stillSizes_.end();
 }
 
 /*

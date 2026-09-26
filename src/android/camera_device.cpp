@@ -397,7 +397,9 @@ int CameraDevice::initialize(const CameraConfigData *cameraConfigData)
 	}
 
 	return capabilities_.initialize(camera_, orientation_, facing_,
-					hasFlash());
+					hasFlash(),
+					cameraConfigData ? cameraConfigData->maxStreamSize
+							 : Size{});
 }
 
 bool CameraDevice::setLed(bool on)
@@ -668,7 +670,10 @@ void CameraDevice::stop()
 		descriptors_ = {};
 	}
 
+	/* The streams point to the configurations: clear them first. */
 	streams_.clear();
+	stillStream_ = nullptr;
+	stillConfig_.reset();
 
 	state_ = State::Stopped;
 }
@@ -780,6 +785,8 @@ int CameraDevice::configureStreams(camera3_stream_configuration_t *stream_list)
 	 */
 	streams_.clear();
 	streams_.reserve(stream_list->num_streams);
+	stillStream_ = nullptr;
+	stillConfig_.reset();
 
 	std::vector<Camera3StreamConfig> streamConfigs;
 	streamConfigs.reserve(stream_list->num_streams);
@@ -902,6 +909,24 @@ int CameraDevice::configureStreams(camera3_stream_configuration_t *stream_list)
 
 		streamConfigs.clear();
 		streamConfigs.push_back(std::move(source));
+	}
+
+	/*
+	 * A JPEG at a still size is captured in a separate full resolution
+	 * configuration, not derived from the other streams. Not with a video
+	 * encoder stream: switching would freeze the recording.
+	 */
+	camera3_stream_t *stillJpeg = nullptr;
+	if (jpegStream && !streamConfigs.empty() &&
+	    capabilities_.isStillSize({ jpegStream->width, jpegStream->height })) {
+		bool video = false;
+		for (unsigned int i = 0; i < stream_list->num_streams; ++i)
+			if (stream_list->streams[i]->usage & GRALLOC_USAGE_HW_VIDEO_ENCODER)
+				video = true;
+		if (!video) {
+			stillJpeg = jpegStream;
+			jpegStream = nullptr;
+		}
 	}
 
 	/* Now handle the MJPEG streams, adding a new stream if required. */
@@ -1051,6 +1076,33 @@ int CameraDevice::configureStreams(camera3_stream_configuration_t *stream_list)
 	case CameraConfiguration::Invalid:
 		LOG(HAL, Info) << "Camera configuration invalid";
 		return -EINVAL;
+	}
+
+	if (stillJpeg) {
+		stillConfig_ = camera_->generateConfiguration();
+		StreamConfiguration stillCfg;
+		stillCfg.pixelFormat = capabilities_.stillFormat();
+		stillCfg.size = { stillJpeg->width, stillJpeg->height };
+		stillConfig_->addConfiguration(stillCfg);
+		stillConfig_->orientation = config->orientation;
+		if (stillConfig_->validate() != CameraConfiguration::Valid) {
+			LOG(HAL, Error) << "Still capture configuration not valid: "
+					<< stillConfig_->at(0).toString();
+			stillConfig_.reset();
+			return -EINVAL;
+		}
+
+		/* Encoded by software from the still configuration's buffer. */
+		stillJpeg->usage |= GRALLOC_USAGE_SW_WRITE_OFTEN;
+		streams_.emplace_back(this, stillConfig_.get(),
+				      CameraStream::Type::Internal, stillJpeg,
+				      nullptr, 0);
+		stillJpeg->priv = static_cast<void *>(&streams_.back());
+		stillStream_ = &streams_.back();
+
+		LOG(HAL, Info) << "JPEG " << stillCfg.size
+			       << " captured in a separate configuration: "
+			       << stillConfig_->at(0).toString();
 	}
 
 	/*
@@ -1337,10 +1389,36 @@ int CameraDevice::processCaptureRequest(camera3_capture_request_t *camera3Reques
 	 * Collect the CameraStream associated to each requested capture stream.
 	 * Since requestedStreams is an std:set<>, no duplications can happen.
 	 */
+	/*
+	 * A request for the still stream is captured alone, in the still
+	 * configuration: its other buffers are returned in error.
+	 */
+	bool still = false;
+	for (const auto &buffer : descriptor->buffers_)
+		if (stillStream_ && buffer.stream == stillStream_)
+			still = true;
+
 	std::set<CameraStream *> requestedStreams;
 	for (const auto &[i, buffer] : utils::enumerate(descriptor->buffers_)) {
 		CameraStream *cameraStream = buffer.stream;
 		camera3_stream_t *camera3Stream = cameraStream->camera3Stream();
+
+		if (still) {
+			if (cameraStream != stillStream_) {
+				buffer.dropped = true;
+				continue;
+			}
+
+			/* Added to the request once the still config is applied. */
+			MutexLocker lock(descriptor->streamsProcessMutex_);
+			buffer.internalBuffer = cameraStream->getBuffer();
+			if (!buffer.internalBuffer) {
+				LOG(HAL, Error) << "No buffer for the still capture";
+				return -ENOMEM;
+			}
+			descriptor->pendingStreamsToProcess_.insert({ cameraStream, &buffer });
+			continue;
+		}
 
 		std::stringstream ss;
 		ss << i << " - (" << camera3Stream->width << "x"
@@ -1417,7 +1495,7 @@ int CameraDevice::processCaptureRequest(camera3_capture_request_t *camera3Reques
 		CameraStream *cameraStream = buffer.stream;
 		camera3_stream_t *camera3Stream = cameraStream->camera3Stream();
 
-		if (cameraStream->type() != CameraStream::Type::Mapped)
+		if (still || cameraStream->type() != CameraStream::Type::Mapped)
 			continue;
 
 		LOG(HAL, Debug) << i << " - (" << camera3Stream->width << "x"
@@ -1462,6 +1540,11 @@ int CameraDevice::processCaptureRequest(camera3_capture_request_t *camera3Reques
 	if (ret)
 		return ret;
 
+	if (still) {
+		descriptor->still_ = true;
+		setStillControls(descriptor->request_->controls());
+	}
+
 	/*
 	 * If flush is in progress set the request status to error and place it
 	 * on the queue to be later completed. If the camera has been stopped we
@@ -1480,6 +1563,9 @@ int CameraDevice::processCaptureRequest(camera3_capture_request_t *camera3Reques
 
 		return 0;
 	}
+
+	if (still)
+		return processStill(std::move(descriptor));
 
 	if (state_ == State::Stopped) {
 		lastSettings_ = {};
@@ -1500,7 +1586,131 @@ int CameraDevice::processCaptureRequest(camera3_capture_request_t *camera3Reques
 		descriptors_.push(std::move(descriptor));
 	}
 
+	{
+		MutexLocker inflightLock(inflightMutex_);
+		inflight_++;
+	}
 	camera_->queueRequest(request);
+
+	return 0;
+}
+
+/* Hold the lens and ignore touches: the still keeps the preview's focus. */
+void CameraDevice::setStillControls(ControlList &controls) const
+{
+	controls.clear();
+	if (camera_->controls().find(controls::AfMode.id()) != camera_->controls().end())
+		controls.set(controls::AfMode, controls::AfModeManual);
+}
+
+void CameraDevice::stillDone()
+{
+	{
+		MutexLocker stillLock(stillMutex_);
+		stillDone_ = true;
+	}
+	stillCv_.notify_one();
+}
+
+/*
+ * Capture a still in the full resolution configuration. Called with the
+ * state lock held, in the framework's request thread: no other request
+ * comes in meanwhile, and flush() and close() wait. The preview requests
+ * in flight are let complete, the camera switches configuration, captures
+ * one frame (again if it is lost), and switches back. The JPEG is encoded
+ * by the still stream's post-processor while the preview restarts.
+ */
+int CameraDevice::processStill(std::unique_ptr<Camera3RequestDescriptor> descriptor)
+{
+	using namespace std::chrono_literals;
+
+	Camera3RequestDescriptor *still = descriptor.get();
+	Camera3RequestDescriptor::StreamBuffer *stillBuffer = nullptr;
+	for (auto &buffer : still->buffers_)
+		if (buffer.stream == stillStream_)
+			stillBuffer = &buffer;
+
+	/* Results go out in order: this one after the preview in flight. */
+	{
+		MutexLocker descriptorsLock(descriptorsMutex_);
+		descriptors_.push(std::move(descriptor));
+	}
+
+	const bool wasRunning = state_ == State::Running;
+	auto t0 = std::chrono::steady_clock::now();
+
+	if (wasRunning) {
+		{
+			MutexLocker inflightLock(inflightMutex_);
+			inflightCv_.wait_for(inflightLock, 300ms, [&]() LIBCAMERA_TSA_REQUIRES(inflightMutex_) {
+				return inflight_ == 0;
+			});
+		}
+		camera_->stop();
+	}
+
+	int ret = camera_->configure(stillConfig_.get());
+	if (!ret)
+		ret = camera_->start();
+	if (ret) {
+		LOG(HAL, Error) << "Still capture configuration failed: " << ret;
+		abortRequest(still);
+		if (stillBuffer && stillBuffer->internalBuffer) {
+			stillStream_->putBuffer(stillBuffer->internalBuffer);
+			stillBuffer->internalBuffer = nullptr;
+		}
+		still->pendingStreamsToProcess_.clear();
+		completeDescriptor(still);
+	} else {
+		auto t1 = std::chrono::steady_clock::now();
+
+		{
+			MutexLocker stillLock(stillMutex_);
+			stillDone_ = false;
+		}
+		still->request_->addBuffer(stillStream_->stream(),
+					   stillBuffer->internalBuffer);
+		{
+			MutexLocker inflightLock(inflightMutex_);
+			inflight_++;
+		}
+		camera_->queueRequest(still->request_.get());
+
+		bool done;
+		{
+			MutexLocker stillLock(stillMutex_);
+			done = stillCv_.wait_for(stillLock, 3s, [&]() LIBCAMERA_TSA_REQUIRES(stillMutex_) {
+				return stillDone_;
+			});
+		}
+		auto t2 = std::chrono::steady_clock::now();
+
+		/* On a timeout, this cancels the request: reported as failed. */
+		camera_->stop();
+
+		LOG(HAL, Debug) << "Still capture: switch "
+			        << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()
+			        << " ms, capture "
+			        << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()
+			        << " ms" << (done ? "" : " (timed out)");
+	}
+
+	ret = camera_->configure(config_.get());
+	if (ret) {
+		LOG(HAL, Error) << "Failed to restore the preview configuration";
+		state_ = State::Stopped;
+		return 0;
+	}
+
+	if (wasRunning) {
+		ret = camera_->start();
+		if (ret) {
+			LOG(HAL, Error) << "Failed to restart the preview";
+			state_ = State::Stopped;
+		}
+	} else {
+		state_ = State::Stopped;
+	}
 
 	return 0;
 }
@@ -1509,6 +1719,13 @@ void CameraDevice::requestComplete(Request *request)
 {
 	Camera3RequestDescriptor *descriptor =
 		reinterpret_cast<Camera3RequestDescriptor *>(request->cookie());
+
+	{
+		MutexLocker inflightLock(inflightMutex_);
+		if (inflight_)
+			inflight_--;
+	}
+	inflightCv_.notify_all();
 
 	/*
 	 * Prepare the capture result for the Android camera stack.
@@ -1527,7 +1744,7 @@ void CameraDevice::requestComplete(Request *request)
 		 * Acquire fences of streams of type Internal and Mapped
 		 * will be handled during post-processing.
 		 */
-		if (stream->type() == CameraStream::Type::Direct) {
+		if (stream->type() == CameraStream::Type::Direct && buffer.frameBuffer) {
 			/* If handling of the fence has failed restore buffer.fence. */
 			std::unique_ptr<Fence> fence = buffer.frameBuffer->releaseFence();
 			if (fence)
@@ -1553,6 +1770,21 @@ void CameraDevice::requestComplete(Request *request)
 			frameLost = true;
 	}
 
+	/* A still frame lost on the way: capture it again, up to three times. */
+	if (descriptor->still_ && frameLost &&
+	    request->status() != Request::RequestCancelled &&
+	    ++descriptor->stillAttempts_ < 3) {
+		LOG(HAL, Warning) << "Still frame lost, capturing again";
+		request->reuse(Request::ReuseBuffers);
+		setStillControls(request->controls());
+		{
+			MutexLocker inflightLock(inflightMutex_);
+			inflight_++;
+		}
+		camera_->queueRequest(request);
+		return;
+	}
+
 	if (request->status() != Request::RequestComplete || frameLost) {
 		LOG(HAL, Error) << "Request " << request->cookie()
 				<< " not successfully completed: "
@@ -1571,7 +1803,10 @@ void CameraDevice::requestComplete(Request *request)
 		}
 		descriptor->pendingStreamsToProcess_.clear();
 
+		bool still = descriptor->still_;
 		completeDescriptor(descriptor);
+		if (still)
+			stillDone();
 
 		return;
 	}
@@ -1586,6 +1821,15 @@ void CameraDevice::requestComplete(Request *request)
 								 .get(controls::SensorTimestamp)
 								 .value_or(0));
 	notifyShutter(descriptor->frameNumber_, sensorTimestamp);
+
+	/* The other streams of a still capture request were not captured. */
+	for (auto &buffer : descriptor->buffers_) {
+		if (!buffer.dropped)
+			continue;
+		notifyError(descriptor->frameNumber_, buffer.stream->camera3Stream(),
+			    CAMERA3_MSG_ERROR_BUFFER);
+		buffer.status = Camera3RequestDescriptor::Status::Error;
+	}
 
 	flashFrameDone(descriptor);
 	afFrameDone(descriptor);
@@ -1651,10 +1895,16 @@ void CameraDevice::requestComplete(Request *request)
 		}
 	}
 
+	/* The still frame is copied out: the camera can switch back. */
+	bool still = descriptor->still_;
 	if (descriptor->pendingStreamsToProcess_.empty()) {
 		locker.unlock();
 		completeDescriptor(descriptor);
+	} else {
+		locker.unlock();
 	}
+	if (still)
+		stillDone();
 }
 
 /**

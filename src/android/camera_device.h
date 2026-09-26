@@ -104,6 +104,15 @@ private:
 	std::unique_ptr<CameraMetadata> getResultMetadata(
 		const Camera3RequestDescriptor &descriptor) const;
 
+	/*
+	 * Still capture at full resolution: the camera switches to a separate
+	 * configuration for one frame, and back to the preview one.
+	 */
+	int processStill(std::unique_ptr<Camera3RequestDescriptor> descriptor)
+		LIBCAMERA_TSA_REQUIRES(stateMutex_);
+	void setStillControls(libcamera::ControlList &controls) const;
+	void stillDone();
+
 	unsigned int id_;
 	camera3_device_t camera3Device_;
 
@@ -118,6 +127,16 @@ private:
 	const camera3_callback_ops_t *callbacks_;
 
 	std::vector<CameraStream> streams_;
+
+	std::unique_ptr<libcamera::CameraConfiguration> stillConfig_;
+	CameraStream *stillStream_ = nullptr;
+	/* Requests queued to the camera and not completed yet */
+	libcamera::Mutex inflightMutex_;
+	libcamera::ConditionVariable inflightCv_;
+	unsigned int inflight_ = 0;
+	libcamera::Mutex stillMutex_;
+	libcamera::ConditionVariable stillCv_;
+	bool stillDone_ = false;
 
 	libcamera::Mutex descriptorsMutex_ LIBCAMERA_TSA_ACQUIRED_AFTER(stateMutex_);
 	std::queue<std::unique_ptr<Camera3RequestDescriptor>> descriptors_

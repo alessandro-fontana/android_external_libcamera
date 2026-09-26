@@ -52,6 +52,8 @@ public:
 		const libcamera::FrameBuffer *srcBuffer = nullptr;
 		std::unique_ptr<CameraBuffer> dstBuffer;
 		Camera3RequestDescriptor *request;
+		/* Not captured: another stream of a still capture request. */
+		bool dropped = false;
 
 	private:
 		LIBCAMERA_DISABLE_COPY(StreamBuffer)
@@ -85,6 +87,10 @@ public:
 	bool flashCapture_ = false;
 	uint8_t aeState_ = 2; /* ANDROID_CONTROL_AE_STATE_CONVERGED */
 	uint8_t flashState_ = 0; /* ANDROID_FLASH_STATE_UNAVAILABLE */
+
+	/* A still capture in the separate full resolution configuration. */
+	bool still_ = false;
+	unsigned int stillAttempts_ = 0;
 
 	/* Autofocus: the request's mode, trigger and region, and its state. */
 	uint8_t afMode_ = 0; /* ANDROID_CONTROL_AF_MODE_OFF */

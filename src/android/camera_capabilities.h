@@ -26,7 +26,8 @@ public:
 	CameraCapabilities() = default;
 
 	int initialize(std::shared_ptr<libcamera::Camera> camera,
-		       int orientation, int facing, bool hasFlash = false);
+		       int orientation, int facing, bool hasFlash = false,
+		       const libcamera::Size &maxStreamSize = {});
 
 	CameraMetadata *staticMetadata() const { return staticMetadata_.get(); }
 	libcamera::PixelFormat toPixelFormat(int format) const;
@@ -34,6 +35,9 @@ public:
 	std::pair<libcamera::PixelFormat, libcamera::PixelFormat>
 		conversionFormats(int format) const;
 	unsigned int maxJpegBufferSize() const { return maxJpegBufferSize_; }
+	/* A JPEG size captured in a separate full resolution configuration */
+	bool isStillSize(const libcamera::Size &size) const;
+	libcamera::PixelFormat stillFormat() const { return stillFormat_; }
 
 	std::unique_ptr<CameraMetadata> requestTemplateManual() const;
 	std::unique_ptr<CameraMetadata> requestTemplatePreview() const;
@@ -74,6 +78,9 @@ private:
 	int facing_;
 	int orientation_;
 	bool hasFlash_ = false;
+	libcamera::Size maxStreamSize_;
+	std::vector<libcamera::Size> stillSizes_;
+	libcamera::PixelFormat stillFormat_;
 	/* A focus lens driven by the IPA: Android's AF modes and one AF region */
 	bool afAvailable_ = false;
 	bool rawStreamAvailable_;

@@ -110,6 +110,16 @@ int CameraHalConfig::Private::parseCameraConfigData(const std::string &cameraId,
 	if (cameraObject.contains("flash"))
 		cameraConfigData.flash = cameraObject["flash"].get<std::string>("");
 
+	/* Optional property "max_stream_size": [width, height]. */
+	if (cameraObject.contains("max_stream_size")) {
+		const YamlObject &size = cameraObject["max_stream_size"];
+		if (!size.isList() || size.size() != 2)
+			return -EINVAL;
+		cameraConfigData.maxStreamSize = {
+			size[0].get<uint32_t>(0), size[1].get<uint32_t>(0)
+		};
+	}
+
 	return 0;
 }
 

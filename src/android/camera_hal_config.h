@@ -12,11 +12,18 @@
 
 #include <libcamera/base/class.h>
 
+#include <libcamera/geometry.h>
+
 struct CameraConfigData {
 	int facing = -1;
 	int rotation = -1;
 	/* Name of the flash LED under /sys/class/leds, if the camera has one */
 	std::string flash;
+	/*
+	 * Largest YUV/PRIV stream, if smaller than the sensor: larger sizes are
+	 * offered as JPEG only, captured in a separate full resolution mode.
+	 */
+	libcamera::Size maxStreamSize;
 };
 
 class CameraHalConfig final : public libcamera::Extensible
