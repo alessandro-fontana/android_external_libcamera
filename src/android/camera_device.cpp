@@ -1795,12 +1795,7 @@ void CameraDevice::requestComplete(Request *request)
 		flashFrameDone(descriptor);
 
 		/* Nothing will post-process them: give the internal buffers back. */
-		for (auto &buffer : descriptor->buffers_) {
-			if (buffer.internalBuffer) {
-				buffer.stream->putBuffer(buffer.internalBuffer);
-				buffer.internalBuffer = nullptr;
-			}
-		}
+		putInternalBuffers(descriptor);
 		descriptor->pendingStreamsToProcess_.clear();
 
 		bool still = descriptor->still_;
@@ -1885,13 +1880,6 @@ void CameraDevice::requestComplete(Request *request)
 		if (ret) {
 			setBufferStatus(*buffer, Camera3RequestDescriptor::Status::Error);
 			descriptor->pendingStreamsToProcess_.erase(stream);
-
-			/*
-			 * If the framebuffer is internal to CameraStream return
-			 * it back now that we're done processing it.
-			 */
-			if (buffer->internalBuffer)
-				stream->putBuffer(buffer->internalBuffer);
 		}
 	}
 
@@ -1899,6 +1887,7 @@ void CameraDevice::requestComplete(Request *request)
 	bool still = descriptor->still_;
 	if (descriptor->pendingStreamsToProcess_.empty()) {
 		locker.unlock();
+		putInternalBuffers(descriptor);
 		completeDescriptor(descriptor);
 	} else {
 		locker.unlock();
@@ -1998,6 +1987,23 @@ void CameraDevice::setBufferStatus(Camera3RequestDescriptor::StreamBuffer &strea
 	}
 }
 
+/*
+ * Give the internal buffers of a request back to their pools. An internal
+ * buffer is the source of every stream derived from it in the request, not
+ * only of the stream it was taken for: it goes back once they are all
+ * processed, not when the first is, or the camera could capture into it
+ * while another stream still reads it.
+ */
+void CameraDevice::putInternalBuffers(Camera3RequestDescriptor *descriptor)
+{
+	for (auto &buffer : descriptor->buffers_) {
+		if (buffer.internalBuffer) {
+			buffer.stream->putBuffer(buffer.internalBuffer);
+			buffer.internalBuffer = nullptr;
+		}
+	}
+}
+
 /**
  * \brief Handle post-processing completion of a stream in a capture request
  * \param[in] streamBuffer The StreamBuffer for which processing is complete
@@ -2016,13 +2022,6 @@ void CameraDevice::streamProcessingComplete(Camera3RequestDescriptor::StreamBuff
 {
 	setBufferStatus(*streamBuffer, status);
 
-	/*
-	 * If the framebuffer is internal to CameraStream return it back now
-	 * that we're done processing it.
-	 */
-	if (streamBuffer->internalBuffer)
-		streamBuffer->stream->putBuffer(streamBuffer->internalBuffer);
-
 	Camera3RequestDescriptor *request = streamBuffer->request;
 
 	{
@@ -2032,6 +2031,8 @@ void CameraDevice::streamProcessingComplete(Camera3RequestDescriptor::StreamBuff
 		if (!request->pendingStreamsToProcess_.empty())
 			return;
 	}
+
+	putInternalBuffers(request);
 
 	completeDescriptor(streamBuffer->request);
 }

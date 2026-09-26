@@ -96,6 +96,7 @@ private:
 	void notifyError(uint32_t frameNumber, camera3_stream_t *stream,
 			 camera3_error_msg_code code) const;
 	int processControls(Camera3RequestDescriptor *descriptor);
+	void putInternalBuffers(Camera3RequestDescriptor *descriptor);
 	void completeDescriptor(Camera3RequestDescriptor *descriptor)
 		LIBCAMERA_TSA_EXCLUDES(descriptorsMutex_);
 	void sendCaptureResults() LIBCAMERA_TSA_REQUIRES(descriptorsMutex_);
