@@ -58,7 +58,8 @@ public:
 		 const ControlInfoMap &lensControls,
 		 ControlInfoMap *ipaControls,
 		 bool *ccmEnabled) override;
-	int configure(const IPAConfigInfo &configInfo) override;
+	int configure(const IPAConfigInfo &configInfo,
+		      ControlList *sensorControls) override;
 
 	int start() override;
 	void stop() override;
@@ -210,17 +211,32 @@ int IPASoftSimple::init(const IPASettings &settings,
 	return 0;
 }
 
-int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+int IPASoftSimple::configure(const IPAConfigInfo &configInfo,
+			     ControlList *sensorControls)
 {
 	sensorInfoMap_ = configInfo.sensorControls;
+
+	/* The line length and the binning belong to the sensor mode. */
+	if (configInfo.sensorInfo.outputSize.width)
+		context_.sensorInfo = configInfo.sensorInfo;
 
 	const ControlInfo &exposureInfo = sensorInfoMap_.find(V4L2_CID_EXPOSURE)->second;
 	const ControlInfo &gainInfo = sensorInfoMap_.find(V4L2_CID_ANALOGUE_GAIN)->second;
 
-	/* Clear the IPA context before the streaming session. */
+	/*
+	 * Clear the IPA context before the streaming session, unless it is a
+	 * new configuration of the same session: then colour, exposure and
+	 * focus carry over.
+	 */
 	context_.configuration = {};
-	context_.activeState = {};
+	if (!configInfo.keepState)
+		context_.activeState = {};
 	context_.frameContexts.clear();
+
+	const Rectangle &crop = context_.sensorInfo.analogCrop;
+	const Size &output = context_.sensorInfo.outputSize;
+	context_.activeState.agc.bin =
+		std::clamp(output.width ? crop.width / output.width : 1u, 1u, 4u);
 
 	const auto focus = lensInfoMap_.find(V4L2_CID_FOCUS_ABSOLUTE);
 	if (focus != lensInfoMap_.end()) {
@@ -285,6 +301,21 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
 			return ret;
 	}
 
+	/* Written before the stream starts: the first frame is already right. */
+	auto &agc = context_.activeState.agc;
+	if (agc.initial) {
+		agc.initial = false;
+		ControlList ctrls(sensorInfoMap_);
+		ctrls.set(V4L2_CID_EXPOSURE, agc.initialExposure);
+		ctrls.set(V4L2_CID_ANALOGUE_GAIN,
+			  static_cast<int32_t>(camHelper_ ? camHelper_->gainCode(agc.initialGain)
+							  : agc.initialGain));
+		*sensorControls = std::move(ctrls);
+		LOG(IPASoft, Debug)
+			<< "Starting mode " << agc.bin << "x with exposure "
+			<< agc.initialExposure << ", gain " << agc.initialGain;
+	}
+
 	LOG(IPASoft, Info)
 		<< "Exposure " << context_.configuration.agc.exposureMin << "-"
 		<< context_.configuration.agc.exposureMax
@@ -331,6 +362,11 @@ void IPASoftSimple::processStats(const uint32_t frame,
 		sensorControls.get(V4L2_CID_EXPOSURE).get<int32_t>();
 	int32_t again = sensorControls.get(V4L2_CID_ANALOGUE_GAIN).get<int32_t>();
 	frameContext.sensor.gain = camHelper_ ? camHelper_->gain(again) : again;
+
+	auto &last = context_.activeState.agc.byBin[context_.activeState.agc.bin - 1];
+	last.time = frameContext.sensor.exposure * context_.configuration.agc.lineDuration;
+	last.gain = frameContext.sensor.gain;
+	last.valid = true;
 
 	ControlList metadata(controls::controls);
 	for (auto const &algo : algorithms())

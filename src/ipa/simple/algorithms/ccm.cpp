@@ -42,10 +42,12 @@ int Ccm::init([[maybe_unused]] IPAContext &context, const YamlObject &tuningData
 	return 0;
 }
 
-int Ccm::configure(IPAContext &context,
-		   [[maybe_unused]] const IPAConfigInfo &configInfo)
+int Ccm::configure(IPAContext &context, const IPAConfigInfo &configInfo)
 {
 	context.activeState.knobs.saturation = std::optional<double>();
+	/* Kept state: rebuild the tables for the new configuration anyway. */
+	if (configInfo.keepState)
+		context.activeState.ccm.changed = true;
 
 	return 0;
 }

@@ -65,7 +65,8 @@ public:
 
 	int configure(const StreamConfiguration &inputCfg,
 		      const std::vector<std::reference_wrapper<StreamConfiguration>> &outputCfgs,
-		      const ipa::soft::IPAConfigInfo &configInfo);
+		      const ipa::soft::IPAConfigInfo &configInfo,
+		      ControlList *sensorControls);
 
 	int exportBuffers(const Stream *stream, unsigned int count,
 			  std::vector<std::unique_ptr<FrameBuffer>> *buffers);
@@ -75,6 +76,7 @@ public:
 
 	int start();
 	void stop();
+	void closeLens();
 
 	void queueRequest(const uint32_t frame, const ControlList &controls);
 	int queueBuffers(uint32_t frame, FrameBuffer *input,

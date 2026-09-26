@@ -54,15 +54,16 @@ IPAProxySoft::IPAProxySoft(IPAModule *ipam, bool isolate)
 			return;
 		}
 
-		ipc_ = std::make_unique<IPCPipeUnixSocket>(ipam->path().c_str(),
-							   proxyWorkerPath.c_str());
-		if (!ipc_->isConnected()) {
+		auto ipc = std::make_unique<IPCPipeUnixSocket>(ipam->path().c_str(),
+							       proxyWorkerPath.c_str());
+		if (!ipc->isConnected()) {
 			LOG(IPAProxy, Error) << "Failed to create IPCPipe";
 			return;
 		}
 
-		ipc_->recv.connect(this, &IPAProxySoft::recvMessage);
+		ipc->recv.connect(this, &IPAProxySoft::recvMessage);
 
+		ipc_ = std::move(ipc);
 		valid_ = true;
 		return;
 	}
@@ -91,7 +92,7 @@ IPAProxySoft::IPAProxySoft(IPAModule *ipam, bool isolate)
 
 IPAProxySoft::~IPAProxySoft()
 {
-	if (isolate_) {
+	if (ipc_) {
 		IPCMessage::Header header =
 			{ static_cast<uint32_t>(_SoftCmd::Exit), seq_++ };
 		IPCMessage msg(header);
@@ -343,23 +344,26 @@ void IPAProxySoft::stopIPC()
 
 
 int32_t IPAProxySoft::configure(
-	const IPAConfigInfo &configInfo)
+	const IPAConfigInfo &configInfo,
+	ControlList *sensorControls)
 {
 	if (isolate_)
-		return configureIPC(configInfo);
+		return configureIPC(configInfo, sensorControls);
 	else
-		return configureThread(configInfo);
+		return configureThread(configInfo, sensorControls);
 }
 
 int32_t IPAProxySoft::configureThread(
-	const IPAConfigInfo &configInfo)
+	const IPAConfigInfo &configInfo,
+	ControlList *sensorControls)
 {
-	return ipa_->configure(configInfo);
+	return ipa_->configure(configInfo, sensorControls);
 
 }
 
 int32_t IPAProxySoft::configureIPC(
-	const IPAConfigInfo &configInfo)
+	const IPAConfigInfo &configInfo,
+	ControlList *sensorControls)
 {
 	controlSerializer_.reset();
 	IPCMessage::Header _header = { static_cast<uint32_t>(_SoftCmd::Configure), seq_++ };
@@ -384,7 +388,16 @@ int32_t IPAProxySoft::configureIPC(
 
 
 
+	const size_t sensorControlsStart = 4;
 
+
+	if (sensorControls) {
+                *sensorControls =
+                IPADataSerializer<ControlList>::deserialize(
+                	_ipcOutputBuf.data().cbegin() + sensorControlsStart,
+                	_ipcOutputBuf.data().cend(),
+                	&controlSerializer_);
+	}
 
 
 	return _retValue;

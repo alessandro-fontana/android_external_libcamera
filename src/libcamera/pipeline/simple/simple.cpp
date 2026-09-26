@@ -346,6 +346,11 @@ public:
 
 	std::unique_ptr<Converter> converter_;
 	std::unique_ptr<SoftwareIsp> swIsp_;
+	/*
+	 * The IPA has run in this acquisition: a new configuration (a still
+	 * capture in another sensor mode) keeps its state.
+	 */
+	bool ipaStateValid_ = false;
 	SimpleFrames frameInfo_;
 
 private:
@@ -404,6 +409,8 @@ public:
 
 	int start(Camera *camera, const ControlList *controls) override;
 	void stopDevice(Camera *camera) override;
+	bool acquireDevice(Camera *camera) override;
+	void releaseDevice(Camera *camera) override;
 
 	bool match(DeviceEnumerator *enumerator) override;
 
@@ -1424,8 +1431,39 @@ int SimplePipelineHandler::configure(Camera *camera, CameraConfiguration *c)
 	} else {
 		ipa::soft::IPAConfigInfo configInfo;
 		configInfo.sensorControls = data->sensor_->controls();
-		return data->swIsp_->configure(inputCfg, outputCfgs, configInfo);
+		data->sensor_->sensorInfo(&configInfo.sensorInfo);
+		configInfo.keepState = data->ipaStateValid_;
+
+		ControlList sensorControls;
+		ret = data->swIsp_->configure(inputCfg, outputCfgs, configInfo,
+					      &sensorControls);
+		if (ret)
+			return ret;
+		data->ipaStateValid_ = true;
+
+		/*
+		 * The exposure to start the new sensor mode with: stored in the
+		 * sensor controls before streaming, applied when it starts.
+		 */
+		if (!sensorControls.empty())
+			data->sensor_->setControls(&sensorControls);
+		return 0;
 	}
+}
+
+bool SimplePipelineHandler::acquireDevice(Camera *camera)
+{
+	cameraData(camera)->ipaStateValid_ = false;
+	return true;
+}
+
+void SimplePipelineHandler::releaseDevice(Camera *camera)
+{
+	SimpleCameraData *data = cameraData(camera);
+
+	if (data->swIsp_)
+		data->swIsp_->closeLens();
+	data->ipaStateValid_ = false;
 }
 
 int SimplePipelineHandler::exportFrameBuffers(Camera *camera, Stream *stream,

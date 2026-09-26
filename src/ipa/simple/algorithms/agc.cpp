@@ -68,14 +68,68 @@ int Agc::init([[maybe_unused]] IPAContext &context, const YamlObject &tuningData
 	msvMin_ = tuningData["msvMin"].get<float>(kExposureMSVMinDefault);
 	saturatedMax_ = tuningData["saturatedMax"].get<double>(kSaturatedMaxDefault);
 	saturatedMin_ = saturatedMax_ / 2;
+	binningGain_ = tuningData["binningGain"].get<double>(1.0);
 	return 0;
 }
 
-int Agc::configure([[maybe_unused]] IPAContext &context,
-		   [[maybe_unused]] const IPAConfigInfo &configInfo)
+int Agc::configure(IPAContext &context, const IPAConfigInfo &configInfo)
 {
 	pending_ = false;
 	waited_ = 0;
+
+	auto &agc = context.activeState.agc;
+	agc.initial = false;
+	if (!configInfo.keepState)
+		return 0;
+
+	/*
+	 * Back in a mode the sensor already ran in: its last exposure.
+	 * Otherwise convert from another one: a binned pixel gathers the light
+	 * of several (binningGain per factor of two), keep the exposure time
+	 * against motion blur and make up with the gain.
+	 */
+	const auto &cfg = context.configuration.agc;
+	auto &same = agc.byBin[agc.bin - 1];
+	utils::Duration time;
+	double gain;
+	if (same.valid) {
+		time = same.time;
+		gain = same.gain;
+	} else {
+		unsigned int from = 0;
+		for (unsigned int i = 0; i < 4 && !from; i++)
+			if (agc.byBin[i].valid)
+				from = i + 1;
+		if (!from)
+			return 0;
+		time = agc.byBin[from - 1].time;
+		gain = agc.byBin[from - 1].gain *
+		       std::pow(binningGain_, std::log2(static_cast<double>(from) / agc.bin));
+	}
+
+	if (gain > cfg.againMax) {
+		time = time * (gain / cfg.againMax);
+		gain = cfg.againMax;
+	} else if (gain < cfg.againMin) {
+		time = time * (gain / cfg.againMin);
+		gain = cfg.againMin;
+	}
+
+	int32_t lines = std::clamp(static_cast<int32_t>(std::lround(time / cfg.lineDuration)),
+				   cfg.exposureMin, cfg.exposureMax);
+	if (lines == cfg.exposureMax && time > lines * cfg.lineDuration)
+		LOG(IPASoftExposure, Debug)
+			<< "Mode " << agc.bin << "x underexposed by "
+			<< time / (lines * cfg.lineDuration);
+
+	agc.initialExposure = lines;
+	agc.initialGain = gain;
+	agc.initial = true;
+
+	/* The AGC waits for these to show before deciding again. */
+	exposureReq_ = lines;
+	gainReq_ = gain;
+	pending_ = true;
 	return 0;
 }
 

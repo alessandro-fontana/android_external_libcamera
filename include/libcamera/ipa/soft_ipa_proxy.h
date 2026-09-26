@@ -50,7 +50,8 @@ public:
         void stop() override;
 
         int32_t configure(
-        	const IPAConfigInfo &configInfo) override;
+        	const IPAConfigInfo &configInfo,
+        	ControlList *sensorControls) override;
 
         void queueRequest(
         	const uint32_t frame,
@@ -95,9 +96,11 @@ private:
         void stopIPC();
 
         int32_t configureThread(
-        	const IPAConfigInfo &configInfo);
+        	const IPAConfigInfo &configInfo,
+        	ControlList *sensorControls);
         int32_t configureIPC(
-        	const IPAConfigInfo &configInfo);
+        	const IPAConfigInfo &configInfo,
+        	ControlList *sensorControls);
 
         void queueRequestThread(
         	const uint32_t frame,

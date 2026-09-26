@@ -65,14 +65,23 @@ int Af::init([[maybe_unused]] IPAContext &context, const YamlObject &tuningData)
 	return 0;
 }
 
-int Af::configure(IPAContext &context,
-		  [[maybe_unused]] const IPAConfigInfo &configInfo)
+int Af::configure(IPAContext &context, const IPAConfigInfo &configInfo)
 {
 	/* Sweep only the useful range: the driver's is the whole DAC. */
 	AfConfiguration &afConfig = context.configuration.af;
 	if (afConfig.enabled && lensMin_ >= 0 && lensMax_ > lensMin_) {
 		afConfig.min = std::max(afConfig.min, lensMin_);
 		afConfig.max = std::min(afConfig.max, lensMax_);
+	}
+
+	/*
+	 * A still capture in another sensor mode, and back: the lens stays
+	 * where it is and the search where it was.
+	 */
+	if (configInfo.keepState && position_ >= 0) {
+		settle_ = kSettleFrames;
+		context.activeState.af.changed = false;
+		return 0;
 	}
 
 	state_ = State::Waiting;

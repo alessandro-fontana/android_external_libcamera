@@ -48,6 +48,23 @@ struct IPAActiveState {
 		bool changed;
 	} af;
 
+	/*
+	 * The exposure the sensor last ran with in each binning factor (index:
+	 * factor - 1), and the one to start the next configuration with: a
+	 * still capture switches to the full resolution mode and back.
+	 */
+	struct {
+		struct {
+			utils::Duration time;
+			double gain;
+			bool valid;
+		} byBin[4];
+		unsigned int bin;
+		int32_t initialExposure;
+		double initialGain;
+		bool initial;
+	} agc;
+
 	struct {
 		uint8_t level;
 		int32_t lastExposure;

@@ -56,17 +56,20 @@ struct IPAConfigInfo
 public:
 #ifndef __DOXYGEN__
 	IPAConfigInfo()
+		: keepState(0)
 	{
 	}
 
-	IPAConfigInfo(const ControlInfoMap &_sensorControls)
-		: sensorControls(_sensorControls)
+	IPAConfigInfo(const ControlInfoMap &_sensorControls, const IPACameraSensorInfo &_sensorInfo, bool _keepState)
+		: sensorControls(_sensorControls), sensorInfo(_sensorInfo), keepState(_keepState)
 	{
 	}
 #endif
 
 
 	ControlInfoMap sensorControls;
+	IPACameraSensorInfo sensorInfo;
+	bool keepState;
 };
 
 class IPASoftInterface : public IPAInterface
@@ -88,7 +91,8 @@ public:
 	virtual void stop() = 0;
 
 	virtual int32_t configure(
-		const IPAConfigInfo &configInfo) = 0;
+		const IPAConfigInfo &configInfo,
+		ControlList *sensorControls) = 0;
 
 	virtual void queueRequest(
 		const uint32_t frame,

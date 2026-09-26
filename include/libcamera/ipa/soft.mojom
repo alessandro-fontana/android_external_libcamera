@@ -10,6 +10,13 @@ import "include/libcamera/ipa/core.mojom";
 
 struct IPAConfigInfo {
 	libcamera.ControlInfoMap sensorControls;
+	/* The sensor mode of this configuration: line length, crop, binning */
+	libcamera.IPACameraSensorInfo sensorInfo;
+	/*
+	 * A new configuration of the same session (a still capture in another
+	 * sensor mode, and back): keep the colour, exposure and focus state.
+	 */
+	bool keepState;
 };
 
 interface IPASoftInterface {
@@ -23,7 +30,7 @@ interface IPASoftInterface {
 	start() => (int32 ret);
 	stop();
 	configure(IPAConfigInfo configInfo)
-		=> (int32 ret);
+		=> (int32 ret, libcamera.ControlList sensorControls);
 
 	[async] queueRequest(uint32 frame, libcamera.ControlList sensorControls);
 	[async] computeParams(uint32 frame);

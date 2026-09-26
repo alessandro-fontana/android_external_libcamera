@@ -260,15 +260,25 @@ SoftwareIsp::strideAndFrameSize(const PixelFormat &outputFormat, const Size &siz
  */
 int SoftwareIsp::configure(const StreamConfiguration &inputCfg,
 			   const std::vector<std::reference_wrapper<StreamConfiguration>> &outputCfgs,
-			   const ipa::soft::IPAConfigInfo &configInfo)
+			   const ipa::soft::IPAConfigInfo &configInfo,
+			   ControlList *sensorControls)
 {
 	ASSERT(ipa_ && debayer_);
 
-	int ret = ipa_->configure(configInfo);
+	int ret = ipa_->configure(configInfo, sensorControls);
 	if (ret < 0)
 		return ret;
 
 	return debayer_->configure(inputCfg, outputCfgs, ccmEnabled_);
+}
+
+/**
+ * \brief Close the lens, letting its driver park it and power down
+ */
+void SoftwareIsp::closeLens()
+{
+	if (lens_)
+		lens_->close();
 }
 
 /**
@@ -369,11 +379,10 @@ void SoftwareIsp::stop()
 	ipa_->stop();
 
 	/*
-	 * The sensor is still streaming: let the lens driver park the lens
-	 * and power down while the lens bus still answers.
+	 * The lens stays open until the camera is released (closeLens()): a
+	 * still capture stops and restarts in another sensor mode, and the
+	 * lens must not move in between.
 	 */
-	if (lens_)
-		lens_->close();
 
 	for (auto buffer : queuedOutputBuffers_) {
 		FrameMetadata &metadata = buffer->_d()->metadata();

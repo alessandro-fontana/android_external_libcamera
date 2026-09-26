@@ -25,9 +25,12 @@ LOG_DEFINE_CATEGORY(IPASoftAwb)
 
 namespace ipa::soft::algorithms {
 
-int Awb::configure(IPAContext &context,
-		   [[maybe_unused]] const IPAConfigInfo &configInfo)
+int Awb::configure(IPAContext &context, const IPAConfigInfo &configInfo)
 {
+	/* A still capture in another sensor mode keeps the preview's gains. */
+	if (configInfo.keepState)
+		return 0;
+
 	auto &gains = context.activeState.awb.gains;
 	gains = { { 1.0, 1.0, 1.0 } };
 

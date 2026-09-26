@@ -41,6 +41,8 @@ private:
 	float msvMin_;
 	double saturatedMax_;
 	double saturatedMin_;
+	/* How much brighter a pixel binned by two is, from the tuning file */
+	double binningGain_ = 1.0;
 };
 
 } /* namespace ipa::soft::algorithms */

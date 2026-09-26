@@ -42,6 +42,17 @@ public:
 			appendPOD<uint32_t>(retData, 0);
 		}
 
+		std::vector<uint8_t> sensorInfo;
+		std::tie(sensorInfo, std::ignore) =
+			IPADataSerializer<libcamera::IPACameraSensorInfo>::serialize(data.sensorInfo, cs);
+		appendPOD<uint32_t>(retData, sensorInfo.size());
+		retData.insert(retData.end(), sensorInfo.begin(), sensorInfo.end());
+
+		std::vector<uint8_t> keepState;
+		std::tie(keepState, std::ignore) =
+			IPADataSerializer<bool>::serialize(data.keepState);
+		retData.insert(retData.end(), keepState.begin(), keepState.end());
+
 		return {retData, {}};
 	}
 
@@ -83,6 +94,41 @@ public:
 		if (sensorControlsSize > 0)
 			ret.sensorControls =
 				IPADataSerializer<ControlInfoMap>::deserialize(m, m + sensorControlsSize, cs);
+		m += sensorControlsSize;
+		dataSize -= sensorControlsSize;
+
+
+		if (dataSize < 4) {
+			LOG(IPADataSerializer, Error)
+				<< "Failed to deserialize " << "sensorInfoSize"
+				<< ": not enough data, expected "
+				<< (4) << ", got " << (dataSize);
+			return ret;
+		}
+		const size_t sensorInfoSize = readPOD<uint32_t>(m, 0, dataEnd);
+		m += 4;
+		dataSize -= 4;
+		if (dataSize < sensorInfoSize) {
+			LOG(IPADataSerializer, Error)
+				<< "Failed to deserialize " << "sensorInfo"
+				<< ": not enough data, expected "
+				<< (sensorInfoSize) << ", got " << (dataSize);
+			return ret;
+		}
+		ret.sensorInfo =
+			IPADataSerializer<libcamera::IPACameraSensorInfo>::deserialize(m, m + sensorInfoSize, cs);
+		m += sensorInfoSize;
+		dataSize -= sensorInfoSize;
+
+
+		if (dataSize < 1) {
+			LOG(IPADataSerializer, Error)
+				<< "Failed to deserialize " << "keepState"
+				<< ": not enough data, expected "
+				<< (1) << ", got " << (dataSize);
+			return ret;
+		}
+		ret.keepState = IPADataSerializer<bool>::deserialize(m, m + 1);
 
 		return ret;
 	}
