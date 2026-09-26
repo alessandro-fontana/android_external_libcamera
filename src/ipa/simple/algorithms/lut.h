@@ -39,6 +39,10 @@ public:
 private:
 	void updateGammaTable(IPAContext &context);
 	int16_t ccmValue(unsigned int i, float ccm) const;
+
+	/* From the tuning file: the defaults of the gamma curve. */
+	float gamma_ = 0.5;
+	float contrast_ = 1.0;
 };
 
 } /* namespace ipa::soft::algorithms */

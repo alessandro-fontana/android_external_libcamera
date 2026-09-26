@@ -24,18 +24,23 @@ LOG_DEFINE_CATEGORY(IPASoftLut)
 
 namespace ipa::soft::algorithms {
 
-int Lut::init(IPAContext &context,
-	      [[maybe_unused]] const YamlObject &tuningData)
+int Lut::init(IPAContext &context, const YamlObject &tuningData)
 {
-	context.ctrlMap[&controls::Contrast] = ControlInfo(0.0f, 2.0f, 1.0f);
+	/*
+	 * A plain 0.5 gamma lifts the shadows of a high contrast scene to a
+	 * washed out grey: a default contrast above 1 adds the S-curve a
+	 * camera normally applies on top.
+	 */
+	gamma_ = tuningData["gamma"].get<float>(0.5);
+	contrast_ = tuningData["contrast"].get<float>(1.0);
+	context.ctrlMap[&controls::Contrast] = ControlInfo(0.0f, 2.0f, contrast_);
 	return 0;
 }
 
 int Lut::configure(IPAContext &context,
 		   [[maybe_unused]] const IPAConfigInfo &configInfo)
 {
-	/* Gamma value is fixed */
-	context.configuration.gamma = 0.5;
+	context.configuration.gamma = gamma_;
 	context.activeState.knobs.contrast = std::optional<double>();
 	updateGammaTable(context);
 
@@ -59,7 +64,7 @@ void Lut::updateGammaTable(IPAContext &context)
 	auto &gammaTable = context.activeState.gamma.gammaTable;
 	const auto blackLevel = context.activeState.blc.level;
 	const unsigned int blackIndex = blackLevel * gammaTable.size() / 256;
-	const auto contrast = context.activeState.knobs.contrast.value_or(1.0);
+	const auto contrast = context.activeState.knobs.contrast.value_or(contrast_);
 
 	std::fill(gammaTable.begin(), gammaTable.begin() + blackIndex, 0);
 	const float divisor = gammaTable.size() - blackIndex - 1.0;
@@ -96,11 +101,14 @@ void Lut::prepare(IPAContext &context,
 	 * Update the gamma table if needed. This means if black level changes
 	 * and since the black level gets updated only if a lower value is
 	 * observed, it's not permanently prone to minor fluctuations or
-	 * rounding errors.
+	 * rounding errors. With no contrast requested, compare with the
+	 * default: an empty optional never equals the value in the table and
+	 * would rebuild the tables on every frame.
 	 */
 	const bool gammaUpdateNeeded =
 		context.activeState.gamma.blackLevel != context.activeState.blc.level ||
-		context.activeState.gamma.contrast != context.activeState.knobs.contrast;
+		context.activeState.gamma.contrast !=
+			context.activeState.knobs.contrast.value_or(contrast_);
 	if (gammaUpdateNeeded)
 		updateGammaTable(context);
 
