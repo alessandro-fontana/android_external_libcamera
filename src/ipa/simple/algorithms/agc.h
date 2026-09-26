@@ -45,6 +45,10 @@ private:
 	double saturatedMin_;
 	/* How much brighter a pixel binned by two is, from the tuning file */
 	double binningGain_ = 1.0;
+	/* The AGC was satisfied with the last frame */
+	bool satisfied_ = false;
+	/* Mean of the linear histogram the AGC settles on, in bins */
+	double yGoal_ = 0;
 	/* Mains flicker period to keep the exposure a multiple of, 0 = off */
 	utils::Duration flickerPeriod_;
 };

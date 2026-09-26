@@ -45,7 +45,9 @@ public:
         	ControlInfoMap *ipaControls,
         	bool *ccmEnabled) override;
 
-        int32_t start() override;
+        int32_t start(
+        	const ControlList &controls,
+        	ControlList *sensorControls) override;
 
         void stop() override;
 
@@ -89,8 +91,12 @@ private:
         	ControlInfoMap *ipaControls,
         	bool *ccmEnabled);
 
-        int32_t startThread();
-        int32_t startIPC();
+        int32_t startThread(
+        	const ControlList &controls,
+        	ControlList *sensorControls);
+        int32_t startIPC(
+        	const ControlList &controls,
+        	ControlList *sensorControls);
 
         void stopThread();
         void stopIPC();
@@ -172,9 +178,11 @@ private:
 			ipa_->stop();
 		}
 
-		int32_t start()
+		int32_t start(
+                	const ControlList &controls,
+                	ControlList *sensorControls)
 		{
-			return ipa_->start();
+			return ipa_->start(controls, sensorControls);
 		}
 		void queueRequest(
                 	const uint32_t frame,

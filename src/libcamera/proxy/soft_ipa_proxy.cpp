@@ -258,29 +258,40 @@ int32_t IPAProxySoft::initIPC(
 }
 
 
-int32_t IPAProxySoft::start()
+int32_t IPAProxySoft::start(
+	const ControlList &controls,
+	ControlList *sensorControls)
 {
 	if (isolate_)
-		return startIPC();
+		return startIPC(controls, sensorControls);
 	else
-		return startThread();
+		return startThread(controls, sensorControls);
 }
 
-int32_t IPAProxySoft::startThread()
+int32_t IPAProxySoft::startThread(
+	const ControlList &controls,
+	ControlList *sensorControls)
 {
 	state_ = ProxyRunning;
 	thread_.start();
 
-	return proxy_.invokeMethod(&ThreadProxy::start, ConnectionTypeBlocking);
+	return proxy_.invokeMethod(&ThreadProxy::start, ConnectionTypeBlocking, controls, sensorControls);
 }
 
-int32_t IPAProxySoft::startIPC()
+int32_t IPAProxySoft::startIPC(
+	const ControlList &controls,
+	ControlList *sensorControls)
 {
 	IPCMessage::Header _header = { static_cast<uint32_t>(_SoftCmd::Start), seq_++ };
 	IPCMessage _ipcInputBuf(_header);
 	IPCMessage _ipcOutputBuf;
 
 
+	std::vector<uint8_t> controlsBuf;
+	std::tie(controlsBuf, std::ignore) =
+		IPADataSerializer<ControlList>::serialize(controls
+, &controlSerializer_);
+	_ipcInputBuf.data().insert(_ipcInputBuf.data().end(), controlsBuf.begin(), controlsBuf.end());
 
 
 	int _ret = ipc_->sendSync(_ipcInputBuf, &_ipcOutputBuf);
@@ -293,7 +304,16 @@ int32_t IPAProxySoft::startIPC()
 
 
 
+	const size_t sensorControlsStart = 4;
 
+
+	if (sensorControls) {
+                *sensorControls =
+                IPADataSerializer<ControlList>::deserialize(
+                	_ipcOutputBuf.data().cbegin() + sensorControlsStart,
+                	_ipcOutputBuf.data().cend(),
+                	&controlSerializer_);
+	}
 
 
 	return _retValue;

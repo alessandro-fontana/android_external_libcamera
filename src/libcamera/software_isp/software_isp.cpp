@@ -351,11 +351,13 @@ int SoftwareIsp::queueBuffers(uint32_t frame, FrameBuffer *input,
 
 /**
  * \brief Starts the Software ISP streaming operation
+ * \param[in] controls The controls to start with
+ * \param[out] sensorControls The sensor controls to write before streaming
  * \return 0 on success, any other value indicates an error
  */
-int SoftwareIsp::start()
+int SoftwareIsp::start(const ControlList &controls, ControlList *sensorControls)
 {
-	int ret = ipa_->start();
+	int ret = ipa_->start(controls, sensorControls);
 	if (ret)
 		return ret;
 

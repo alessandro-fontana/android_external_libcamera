@@ -20,6 +20,11 @@ struct CameraConfigData {
 	/* Name of the flash LED under /sys/class/leds, if the camera has one */
 	std::string flash;
 	/*
+	 * How much more light the flash strobe gives than the torch, 0 for no
+	 * strobe: the stills are then lit by the torch.
+	 */
+	double flashGain = 0;
+	/*
 	 * Largest YUV/PRIV stream, if smaller than the sensor: larger sizes are
 	 * offered as JPEG only, captured in a separate full resolution mode.
 	 */

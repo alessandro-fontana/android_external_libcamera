@@ -10,6 +10,7 @@
 #include <libcamera/orientation.h>
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <fstream>
 #include <set>
@@ -391,6 +392,21 @@ int CameraDevice::initialize(const CameraConfigData *cameraConfigData)
 			flash_.levels = levels;
 			LOG(HAL, Info) << "Flash LED " << cameraConfigData->flash
 				       << ", " << levels << " torch levels";
+
+			/* The strobe at full current, stopped once the still is in. */
+			std::ifstream maxUa(led + "/max_flash_brightness");
+			std::ifstream maxUs(led + "/max_flash_timeout");
+			int ua = 0, us = 0;
+			maxUa >> ua;
+			maxUs >> us;
+			if (cameraConfigData->flashGain > 1 && ua > 0 && us > 0) {
+				std::ofstream(led + "/flash_brightness") << ua << std::endl;
+				std::ofstream(led + "/flash_timeout") << us << std::endl;
+				flash_.strobe = led + "/flash_strobe";
+				flash_.gain = cameraConfigData->flashGain;
+				LOG(HAL, Info) << "Flash strobe " << ua << " uA, "
+					       << flash_.gain << " times the torch";
+			}
 		} else {
 			LOG(HAL, Error) << "Flash LED " << led << " not found";
 		}
@@ -417,6 +433,40 @@ bool CameraDevice::setLed(bool on)
 
 	flash_.ledOn = on;
 	return true;
+}
+
+bool CameraDevice::setStrobe(bool on)
+{
+	std::ofstream strobe(flash_.strobe);
+	strobe << (on ? 1 : 0) << std::endl;
+	if (!strobe) {
+		LOG(HAL, Error) << "Failed to " << (on ? "fire" : "stop")
+				<< " the flash strobe";
+		return false;
+	}
+
+	/* Strobe on or off, the torch is off. */
+	flash_.ledOn = on;
+	return true;
+}
+
+/*
+ * The exposure value for a still lit by the strobe, from the precapture:
+ * the torch added lit - ambient of light, the strobe adds gain times as
+ * much. The light is relative to the brightness the AGC settles on, so the
+ * exposure that gives that brightness is its inverse; the still starts
+ * from the exposure of the last frame with the torch.
+ */
+float CameraDevice::flashExposureValue()
+{
+	if (flash_.ambient <= 0 || flash_.lit <= 0 || flash_.litExposure <= 0)
+		return 0;
+
+	double torch = std::max(flash_.lit - flash_.ambient, 0.0);
+	double strobe = flash_.ambient + flash_.gain * torch;
+	double scale = 1 / (strobe * flash_.litExposure);
+
+	return std::clamp(static_cast<float>(std::log2(scale)), -6.0f, 2.0f);
 }
 
 /* The torch outside a camera session (Android's flashlight). */
@@ -463,6 +513,8 @@ void CameraDevice::updateFlash(Camera3RequestDescriptor *descriptor)
 					flash_.assistSince = std::chrono::steady_clock::now();
 					/* Frames for the AE to settle on the LED. */
 					flash_.precaptureFrames = 8;
+					flash_.lit = 0;
+					flash_.litExposure = 0;
 				}
 				break;
 			case ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL:
@@ -575,6 +627,18 @@ void CameraDevice::flashFrameDone(Camera3RequestDescriptor *descriptor)
 	const auto &gain = descriptor->request_->metadata().get(controls::AnalogueGain);
 	if (gain && !flash_.ledOn)
 		flash_.dark = *gain >= 4.0f;
+
+	/* The light metered before and during the precapture. */
+	const auto &time = descriptor->request_->metadata().get(controls::ExposureTime);
+	const auto &lux = descriptor->request_->metadata().get(controls::Lux);
+	if (gain && time && lux && *lux > 0 && !descriptor->still_) {
+		if (!flash_.ledOn) {
+			flash_.ambient = *lux;
+		} else if (flash_.assist && !flash_.precaptureFrames) {
+			flash_.lit = *lux;
+			flash_.litExposure = *time * *gain;
+		}
+	}
 
 	descriptor->aeState_ = ANDROID_CONTROL_AE_STATE_CONVERGED;
 	if (flash_.precaptureFrames) {
@@ -1649,9 +1713,25 @@ int CameraDevice::processStill(std::unique_ptr<Camera3RequestDescriptor> descrip
 		camera_->stop();
 	}
 
+	/* Lit by the strobe, fired as the sensor starts. */
+	bool strobe = false;
+	ControlList startControls(controls::controls);
 	int ret = camera_->configure(stillConfig_.get());
-	if (!ret)
-		ret = camera_->start();
+	if (!ret) {
+		if (still->flashCapture_ && hasFlash()) {
+			MutexLocker lock(flash_.lock);
+			/* Without the strobe, the torch lights it as metered. */
+			if (!flash_.strobe.empty() && setStrobe(true)) {
+				float ev = flashExposureValue();
+				startControls.set(controls::ExposureValue, ev);
+				strobe = true;
+				LOG(HAL, Debug) << "Still lit by the strobe, exposure value "
+					        << ev << " (ambient " << flash_.ambient
+					        << ", torch " << flash_.lit << ")";
+			}
+		}
+		ret = camera_->start(&startControls);
+	}
 	if (ret) {
 		LOG(HAL, Error) << "Still capture configuration failed: " << ret;
 		abortRequest(still);
@@ -1693,6 +1773,11 @@ int CameraDevice::processStill(std::unique_ptr<Camera3RequestDescriptor> descrip
 			        << " ms, capture "
 			        << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()
 			        << " ms" << (done ? "" : " (timed out)");
+	}
+
+	if (strobe) {
+		MutexLocker lock(flash_.lock);
+		setStrobe(false);
 	}
 
 	ret = camera_->configure(config_.get());

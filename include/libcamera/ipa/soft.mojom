@@ -27,7 +27,13 @@ interface IPASoftInterface {
 	     libcamera.ControlInfoMap sensorControls,
 	     libcamera.ControlInfoMap lensControls)
 		=> (int32 ret, libcamera.ControlInfoMap ipaControls, bool ccmEnabled);
-	start() => (int32 ret);
+	/*
+	 * controls: the controls to start with. An ExposureValue scales the
+	 * exposure the configuration starts with (a still lit by the flash);
+	 * sensorControls are written to the sensor before streaming.
+	 */
+	start(libcamera.ControlList controls)
+		=> (int32 ret, libcamera.ControlList sensorControls);
 	stop();
 	configure(IPAConfigInfo configInfo)
 		=> (int32 ret, libcamera.ControlList sensorControls);

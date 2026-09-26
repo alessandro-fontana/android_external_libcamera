@@ -1484,7 +1484,7 @@ int SimplePipelineHandler::exportFrameBuffers(Camera *camera, Stream *stream,
 		return data->video_->exportBuffers(count, buffers);
 }
 
-int SimplePipelineHandler::start(Camera *camera, [[maybe_unused]] const ControlList *controls)
+int SimplePipelineHandler::start(Camera *camera, const ControlList *controls)
 {
 	SimpleCameraData *data = cameraData(camera);
 	V4L2VideoDevice *video = data->video_;
@@ -1518,6 +1518,23 @@ int SimplePipelineHandler::start(Camera *camera, [[maybe_unused]] const ControlL
 
 	video->bufferReady.connect(data, &SimpleCameraData::imageBufferReady);
 
+	/*
+	 * The software ISP first: the sensor controls it starts with (an
+	 * exposure scaled for the flash) apply from the first frame,
+	 * and the delayed controls start from them.
+	 */
+	if (data->useConversion_ && data->swIsp_) {
+		ControlList sensorControls;
+		ret = data->swIsp_->start(controls ? *controls : ControlList(),
+					  &sensorControls);
+		if (ret < 0) {
+			stop(camera);
+			return ret;
+		}
+		if (!sensorControls.empty())
+			data->sensor_->setControls(&sensorControls);
+	}
+
 	data->delayedCtrls_->reset();
 	if (frameStartEmitter) {
 		ret = frameStartEmitter->setFrameStartEnabled(true);
@@ -1536,16 +1553,12 @@ int SimplePipelineHandler::start(Camera *camera, [[maybe_unused]] const ControlL
 	}
 
 	if (data->useConversion_) {
-		if (data->converter_)
+		if (data->converter_) {
 			ret = data->converter_->start();
-		else if (data->swIsp_)
-			ret = data->swIsp_->start();
-		else
-			ret = 0;
-
-		if (ret < 0) {
-			stop(camera);
-			return ret;
+			if (ret < 0) {
+				stop(camera);
+				return ret;
+			}
 		}
 
 		/* Queue all internal buffers for capture. */

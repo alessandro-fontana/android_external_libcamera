@@ -211,7 +211,20 @@ void PostProcessorJpeg::process(Camera3RequestDescriptor::StreamBuffer *streamBu
 	ret = resultMetadata->getEntry(ANDROID_SENSOR_SENSITIVITY, &entry);
 	exif.setISO(ret ? *entry.data.i32 : 100);
 
-	exif.setFlash(Exif::Flash::FlashNotPresent);
+	/* Whether the flash fired, and in which mode, from the capture result. */
+	int flash = Exif::Flash::FlashNotPresent;
+	ret = resultMetadata->getEntry(ANDROID_FLASH_STATE, &entry);
+	if (ret && *entry.data.u8 != ANDROID_FLASH_STATE_UNAVAILABLE) {
+		flash = *entry.data.u8 == ANDROID_FLASH_STATE_FIRED ? Exif::Flash::Fired : 0;
+		ret = resultMetadata->getEntry(ANDROID_CONTROL_AE_MODE, &entry);
+		if (ret && *entry.data.u8 == ANDROID_CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+			flash |= Exif::Flash::ModeCompulsoryFiring;
+		else if (ret && *entry.data.u8 == ANDROID_CONTROL_AE_MODE_ON_AUTO_FLASH)
+			flash |= Exif::Flash::ModeAuto;
+		else
+			flash |= Exif::Flash::ModeCompulsorySuppression;
+	}
+	exif.setFlash(static_cast<Exif::Flash>(flash));
 	exif.setWhiteBalance(Exif::WhiteBalance::Auto);
 
 	exif.setFocalLength(1.0);

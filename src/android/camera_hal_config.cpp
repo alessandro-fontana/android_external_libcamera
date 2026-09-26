@@ -109,6 +109,7 @@ int CameraHalConfig::Private::parseCameraConfigData(const std::string &cameraId,
 	/* Optional property "flash": the LED class device of the flash. */
 	if (cameraObject.contains("flash"))
 		cameraConfigData.flash = cameraObject["flash"].get<std::string>("");
+	cameraConfigData.flashGain = cameraObject["flash_gain"].get<double>(0);
 
 	/* Optional property "max_stream_size": [width, height]. */
 	if (cameraObject.contains("max_stream_size")) {

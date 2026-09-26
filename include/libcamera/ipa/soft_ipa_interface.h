@@ -86,7 +86,9 @@ public:
 		ControlInfoMap *ipaControls,
 		bool *ccmEnabled) = 0;
 
-	virtual int32_t start() = 0;
+	virtual int32_t start(
+		const ControlList &controls,
+		ControlList *sensorControls) = 0;
 
 	virtual void stop() = 0;
 

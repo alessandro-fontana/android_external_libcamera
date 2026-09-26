@@ -5,7 +5,9 @@
  * Simple Software Image Processing Algorithm module
  */
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <stdint.h>
 #include <sys/mman.h>
 
@@ -61,7 +63,7 @@ public:
 	int configure(const IPAConfigInfo &configInfo,
 		      ControlList *sensorControls) override;
 
-	int start() override;
+	int start(const ControlList &controls, ControlList *sensorControls) override;
 	void stop() override;
 
 	void queueRequest(const uint32_t frame, const ControlList &controls) override;
@@ -303,8 +305,13 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo,
 
 	/* Written before the stream starts: the first frame is already right. */
 	auto &agc = context_.activeState.agc;
+	agc.scaled = false;
+	agc.scaledPending = false;
+	agc.startValid = agc.initial;
 	if (agc.initial) {
 		agc.initial = false;
+		agc.startExposure = agc.initialExposure;
+		agc.startGain = agc.initialGain;
 		ControlList ctrls(sensorInfoMap_);
 		ctrls.set(V4L2_CID_EXPOSURE, agc.initialExposure);
 		ctrls.set(V4L2_CID_ANALOGUE_GAIN,
@@ -326,8 +333,38 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo,
 	return 0;
 }
 
-int IPASoftSimple::start()
+int IPASoftSimple::start(const ControlList &controls, ControlList *sensorControls)
 {
+	/*
+	 * A still lit by the flash: the exposure the configuration starts
+	 * with, scaled. Exposure time first, as the AGC would.
+	 */
+	const auto ev = controls.get(controls::ExposureValue);
+	auto &agc = context_.activeState.agc;
+	if (!ev || *ev == 0.0f || !agc.startValid)
+		return 0;
+
+	const auto &cfg = context_.configuration.agc;
+	double total = agc.startExposure * agc.startGain * std::exp2(*ev);
+	int32_t exposure = std::clamp(static_cast<int32_t>(std::lround(total / agc.startGain)),
+				      cfg.exposureMin, cfg.exposureMax);
+	double gain = std::clamp(total / exposure, cfg.againMin, cfg.againMax);
+
+	ControlList ctrls(sensorInfoMap_);
+	ctrls.set(V4L2_CID_EXPOSURE, exposure);
+	ctrls.set(V4L2_CID_ANALOGUE_GAIN,
+		  static_cast<int32_t>(camHelper_ ? camHelper_->gainCode(gain) : gain));
+	*sensorControls = std::move(ctrls);
+
+	agc.startExposure = exposure;
+	agc.startGain = gain;
+	agc.scaled = true;
+	agc.scaledPending = true;
+
+	LOG(IPASoft, Debug)
+		<< "Starting with exposure value " << *ev << ": exposure "
+		<< exposure << ", gain " << gain;
+
 	return 0;
 }
 
@@ -363,10 +400,12 @@ void IPASoftSimple::processStats(const uint32_t frame,
 	int32_t again = sensorControls.get(V4L2_CID_ANALOGUE_GAIN).get<int32_t>();
 	frameContext.sensor.gain = camHelper_ ? camHelper_->gain(again) : again;
 
-	auto &last = context_.activeState.agc.byBin[context_.activeState.agc.bin - 1];
-	last.time = frameContext.sensor.exposure * context_.configuration.agc.lineDuration;
-	last.gain = frameContext.sensor.gain;
-	last.valid = true;
+	if (!context_.activeState.agc.scaled) {
+		auto &last = context_.activeState.agc.byBin[context_.activeState.agc.bin - 1];
+		last.time = frameContext.sensor.exposure * context_.configuration.agc.lineDuration;
+		last.gain = frameContext.sensor.gain;
+		last.valid = true;
+	}
 
 	ControlList metadata(controls::controls);
 	for (auto const &algo : algorithms())

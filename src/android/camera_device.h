@@ -152,13 +152,17 @@ private:
 	CameraMetadata lastSettings_;
 
 	/*
-	 * The flash LED, driven from sysfs. With a software ISP there is no
-	 * strobe synchronised with the exposure: the LED stays on from the
-	 * AE precapture to the end of the still capture, and AE adapts to it.
+	 * The flash LED, driven from sysfs. The torch lights the scene from
+	 * the AE precapture on, and AE adapts to it. A still in the separate
+	 * configuration is lit by the strobe instead, started with the
+	 * sensor: the exposure is scaled from the precapture's by how much
+	 * more light it gives (pre-flash metering).
 	 */
 	void updateFlash(Camera3RequestDescriptor *descriptor);
 	void flashFrameDone(Camera3RequestDescriptor *descriptor);
 	bool setLed(bool on);
+	bool setStrobe(bool on);
+	float flashExposureValue();
 
 	/*
 	 * Autofocus: Android's AF state machine over the IPA's AfState. A
@@ -180,6 +184,15 @@ private:
 	struct {
 		std::string brightness;
 		int levels = 0;
+		std::string strobe; /* empty: no strobe, the torch lights stills */
+		double gain = 0;
+		/*
+		 * The light (the IPA's Lux, per unit of exposure) without and
+		 * with the torch, and the exposure (us times gain) with it.
+		 */
+		double ambient = 0;
+		double lit = 0;
+		double litExposure = 0;
 		libcamera::Mutex lock;
 		bool torch = false; /* FLASH_MODE_TORCH, or set_torch_mode */
 		bool assist = false; /* from the precapture to the capture */

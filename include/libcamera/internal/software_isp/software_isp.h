@@ -74,7 +74,7 @@ public:
 	void processStats(const uint32_t frame, const uint32_t bufferId,
 			  const ControlList &sensorControls);
 
-	int start();
+	int start(const ControlList &controls, ControlList *sensorControls);
 	void stop();
 	void closeLens();
 

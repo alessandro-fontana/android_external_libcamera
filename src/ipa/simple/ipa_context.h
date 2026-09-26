@@ -63,6 +63,17 @@ struct IPAActiveState {
 		int32_t initialExposure;
 		double initialGain;
 		bool initial;
+		/* What the configuration started with, and whether it is known */
+		int32_t startExposure;
+		double startGain;
+		bool startValid;
+		/*
+		 * The configuration started with a scaled exposure (a still lit
+		 * by the flash): not what the mode needs in the ambient light,
+		 * so not remembered, and the AGC takes it as its last request.
+		 */
+		bool scaled;
+		bool scaledPending;
 	} agc;
 
 	struct {

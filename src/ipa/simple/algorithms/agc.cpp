@@ -63,6 +63,9 @@ static constexpr unsigned int kMaxWait = 8;
  */
 static constexpr unsigned int kFlickerPeriodDefault = 10000;
 
+/* The linear mean the AGC settles on, until it has settled once. */
+static constexpr double kYGoalDefault = 0.25;
+
 Agc::Agc()
 	: pending_(false), exposureReq_(0), gainReq_(0), waited_(0),
 	  target_(kExposureOptimal), msvMin_(kExposureMSVMinDefault),
@@ -168,6 +171,16 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
 	int32_t &exposure = frameContext.sensor.exposure;
 	double &again = frameContext.sensor.gain;
 
+	/* Started with a scaled exposure: that is the request to wait for. */
+	auto &state = context.activeState.agc;
+	if (state.scaledPending) {
+		state.scaledPending = false;
+		exposureReq_ = state.startExposure;
+		gainReq_ = state.startGain;
+		pending_ = true;
+		waited_ = 0;
+	}
+
 	/*
 	 * A change reaches the sensor output some frames later. Deciding
 	 * again on frames still taken with the old values stacks corrections
@@ -175,6 +188,7 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
 	 * hysteresis and oscillates around the target. Keep asking for the
 	 * last values until the frame controls show them.
 	 */
+	satisfied_ = false;
 	if (pending_) {
 		bool arrived = exposure == exposureReq_ &&
 			       std::abs(again - gainReq_) <= 0.03 * gainReq_;
@@ -196,7 +210,8 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
 		    (saturated > saturatedMax_ && exposureMSV > msvMin_);
 	bool under = exposureMSV < target_ - kExposureSatisfactory &&
 		     saturated < saturatedMin_;
-	if (!over && !under)
+	satisfied_ = !over && !under;
+	if (satisfied_)
 		return;
 
 	/*
@@ -281,6 +296,29 @@ void Agc::process(IPAContext &context,
 	double saturated = total ? static_cast<double>(histogram[SwIspStats::kYHistogramSize - 1]) / total : 0;
 
 	updateExposure(context, frameContext, exposureMSV, saturated);
+
+	/*
+	 * The light, relative to what the AGC settles on: the mean of the
+	 * histogram above the black level (linear, the statistics are taken
+	 * before the gamma) over the goal, per unit of exposure time (us)
+	 * and gain. Unlike the exposure alone it still measures when the
+	 * exposure is at its limit: the flash metering compares frames
+	 * without and with the torch on it.
+	 */
+	double sum = 0;
+	unsigned int count = 0;
+	for (unsigned int i = blackLevelHistIdx; i < SwIspStats::kYHistogramSize; i++) {
+		sum += (i - blackLevelHistIdx + 0.5) * histogram[i];
+		count += histogram[i];
+	}
+	double meanY = count ? sum / count : 0;
+	if (satisfied_ && meanY > 0)
+		yGoal_ = yGoal_ ? 0.9 * yGoal_ + 0.1 * meanY : meanY;
+
+	double goal = yGoal_ ? yGoal_ : histogramSize * kYGoalDefault;
+	double product = exposureTime.get<std::micro>() * frameContext.sensor.gain;
+	if (product > 0)
+		metadata.set(controls::Lux, static_cast<float>(meanY / goal / product));
 }
 
 REGISTER_IPA_ALGORITHM(Agc, "Agc")
