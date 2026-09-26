@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <stdint.h>
 
 #include <libcamera/base/log.h>
@@ -40,14 +41,34 @@ static constexpr float kExposureOptimal = kExposureBinsCount / 2.0;
 static constexpr float kExposureSatisfactory = 0.2;
 
 /*
+ * Highlight protection, defaults of the tuning file keys: above
+ * saturatedMax of burnt pixels the exposure goes down, as long as the MSV
+ * stays above msvMin; below half of saturatedMax it may go up again. The
+ * gap is the hysteresis.
+ */
+static constexpr double kSaturatedMaxDefault = 0.04;
+static constexpr float kExposureMSVMinDefault = 1.6;
+
+/*
  * Frames to wait at most for a change to show in the sensor controls
  * reported for a frame, before deciding again anyway.
  */
 static constexpr unsigned int kMaxWait = 8;
 
 Agc::Agc()
-	: pending_(false), exposureReq_(0), gainReq_(0), waited_(0)
+	: pending_(false), exposureReq_(0), gainReq_(0), waited_(0),
+	  target_(kExposureOptimal), msvMin_(kExposureMSVMinDefault),
+	  saturatedMax_(kSaturatedMaxDefault), saturatedMin_(kSaturatedMaxDefault / 2)
 {
+}
+
+int Agc::init([[maybe_unused]] IPAContext &context, const YamlObject &tuningData)
+{
+	target_ = tuningData["target"].get<float>(kExposureOptimal);
+	msvMin_ = tuningData["msvMin"].get<float>(kExposureMSVMinDefault);
+	saturatedMax_ = tuningData["saturatedMax"].get<double>(kSaturatedMaxDefault);
+	saturatedMin_ = saturatedMax_ / 2;
+	return 0;
 }
 
 int Agc::configure([[maybe_unused]] IPAContext &context,
@@ -58,7 +79,8 @@ int Agc::configure([[maybe_unused]] IPAContext &context,
 	return 0;
 }
 
-void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, double exposureMSV)
+void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+			 double exposureMSV, double saturated)
 {
 	const auto &agc = context.configuration.agc;
 	int32_t &exposure = frameContext.sensor.exposure;
@@ -82,7 +104,17 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, dou
 		pending_ = false;
 	}
 
-	if (std::abs(exposureMSV - kExposureOptimal) <= kExposureSatisfactory)
+	/*
+	 * The MSV is a mean: against the light the shade sets it, and the
+	 * sunlit background burns out. Burnt highlights count as too much
+	 * light unless the rest would get too dark, and more light is not
+	 * asked for while they are already at the limit.
+	 */
+	bool over = exposureMSV > target_ + kExposureSatisfactory ||
+		    (saturated > saturatedMax_ && exposureMSV > msvMin_);
+	bool under = exposureMSV < target_ - kExposureSatisfactory &&
+		     saturated < saturatedMin_;
+	if (!over && !under)
 		return;
 
 	/*
@@ -92,12 +124,14 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, dou
 	 * largest step.
 	 */
 	double factor;
-	if (exposureMSV >= kExposureBinsCount - 0.5)
+	if (over && exposureMSV <= target_ + kExposureSatisfactory)
+		factor = 0.85;
+	else if (exposureMSV >= kExposureBinsCount - 0.5)
 		factor = 0.5;
 	else if (exposureMSV <= 1.2)
 		factor = 2.0;
 	else
-		factor = std::clamp(std::sqrt(kExposureOptimal / exposureMSV), 0.6, 1.6);
+		factor = std::clamp(std::sqrt(target_ / exposureMSV), 0.6, 1.6);
 
 	/* Exposure first, gain only for what the exposure cannot give. */
 	double total = exposure * again * factor;
@@ -160,7 +194,12 @@ void Agc::process(IPAContext &context,
 	}
 
 	float exposureMSV = (denom == 0 ? 0 : static_cast<float>(num) / denom);
-	updateExposure(context, frameContext, exposureMSV);
+
+	/* The share of burnt pixels: the top entry of the histogram. */
+	const unsigned int total = std::accumulate(histogram.begin(), histogram.end(), 0u);
+	double saturated = total ? static_cast<double>(histogram[SwIspStats::kYHistogramSize - 1]) / total : 0;
+
+	updateExposure(context, frameContext, exposureMSV, saturated);
 }
 
 REGISTER_IPA_ALGORITHM(Agc, "Agc")

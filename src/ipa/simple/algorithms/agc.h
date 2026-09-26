@@ -19,6 +19,7 @@ public:
 	Agc();
 	~Agc() = default;
 
+	int init(IPAContext &context, const YamlObject &tuningData) override;
 	int configure(IPAContext &context, const IPAConfigInfo &configInfo) override;
 	void process(IPAContext &context, const uint32_t frame,
 		     IPAFrameContext &frameContext,
@@ -26,13 +27,20 @@ public:
 		     ControlList &metadata) override;
 
 private:
-	void updateExposure(IPAContext &context, IPAFrameContext &frameContext, double exposureMSV);
+	void updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+			    double exposureMSV, double saturated);
 
 	/* The last exposure and gain asked for, and frames spent waiting for them. */
 	bool pending_;
 	int32_t exposureReq_;
 	double gainReq_;
 	unsigned int waited_;
+
+	/* From the tuning file: MSV target and highlight protection. */
+	float target_;
+	float msvMin_;
+	double saturatedMax_;
+	double saturatedMin_;
 };
 
 } /* namespace ipa::soft::algorithms */
