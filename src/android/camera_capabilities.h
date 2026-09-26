@@ -74,6 +74,8 @@ private:
 	int facing_;
 	int orientation_;
 	bool hasFlash_ = false;
+	/* A focus lens driven by the IPA: Android's AF modes and one AF region */
+	bool afAvailable_ = false;
 	bool rawStreamAvailable_;
 	int64_t maxFrameDuration_;
 	camera_metadata_enum_android_info_supported_hardware_level hwLevel_;

@@ -17,6 +17,8 @@
 
 #include <libcamera/base/log.h>
 
+#include "control_ids.h"
+
 namespace libcamera {
 
 LOG_DEFINE_CATEGORY(IPASoftAf)
@@ -53,6 +55,8 @@ static constexpr unsigned int kSteadyFrames = 10;
 static constexpr double kPeakRatio = 1.15;
 /* A climb step must improve the contrast by this much to count */
 static constexpr double kClimbGain = 1.03;
+/* The central ninth of the frame, in 1/65535 units */
+static constexpr std::array<uint16_t, 4> kDefaultWindow = { 21845, 21845, 21845, 21845 };
 
 int Af::init([[maybe_unused]] IPAContext &context, const YamlObject &tuningData)
 {
@@ -82,6 +86,13 @@ int Af::configure(IPAContext &context,
 	reference_ = 0.0;
 
 	context.activeState.af.changed = false;
+
+	mode_ = controls::AfModeContinuous;
+	window_ = kDefaultWindow;
+	windowChanged_ = false;
+	triggered_ = false;
+	locked_ = false;
+	failed_ = false;
 
 	if (context.configuration.af.enabled)
 		LOG(IPASoftAf, Debug)
@@ -146,6 +157,7 @@ void Af::sweep(IPAContext &context, double sharpness)
 			<< "), parking mid-range";
 		bestPosition_ = (af.min + af.max) / 2;
 		finish(context);
+		failed_ = true;
 		return;
 	}
 
@@ -222,6 +234,7 @@ void Af::climb(IPAContext &context, double sharpness)
 void Af::finish(IPAContext &context)
 {
 	state_ = State::Focused;
+	failed_ = false;
 	reference_ = best_;
 	last_ = best_;
 	changed_ = 0;
@@ -264,11 +277,82 @@ void Af::watch(IPAContext &context, double sharpness, double brightness)
 	}
 }
 
+/*
+ * An Android AF region is in active array coordinates. The frame the stats
+ * see is the analogue crop of the sensor, scaled to its output: express the
+ * region as fractions of it.
+ */
+std::array<uint16_t, 4> Af::windowFromRegion(const IPAContext &context,
+					     const Rectangle &region) const
+{
+	const Rectangle &crop = context.sensorInfo.analogCrop;
+	if (crop.width == 0 || crop.height == 0)
+		return kDefaultWindow;
+
+	auto fraction = [](int64_t v, unsigned int size) {
+		return static_cast<uint16_t>(std::clamp<int64_t>(v * 65535 / size, 0, 65535));
+	};
+
+	int64_t x0 = std::clamp<int64_t>(region.x - crop.x, 0, crop.width);
+	int64_t y0 = std::clamp<int64_t>(region.y - crop.y, 0, crop.height);
+	int64_t x1 = std::clamp<int64_t>(region.x + region.width - crop.x, 0, crop.width);
+	int64_t y1 = std::clamp<int64_t>(region.y + region.height - crop.y, 0, crop.height);
+	if (x1 <= x0 || y1 <= y0)
+		return kDefaultWindow;
+
+	return { fraction(x0, crop.width), fraction(y0, crop.height),
+		 fraction(x1 - x0, crop.width), fraction(y1 - y0, crop.height) };
+}
+
+void Af::queueRequest(IPAContext &context,
+		      [[maybe_unused]] const uint32_t frame,
+		      [[maybe_unused]] IPAFrameContext &frameContext,
+		      const ControlList &ctrls)
+{
+	if (!context.configuration.af.enabled)
+		return;
+
+	const auto &mode = ctrls.get(controls::AfMode);
+	if (mode)
+		mode_ = *mode;
+
+	const auto &metering = ctrls.get(controls::AfMetering);
+	const auto &windows = ctrls.get(controls::AfWindows);
+	if (metering) {
+		std::array<uint16_t, 4> window = kDefaultWindow;
+		if (*metering == controls::AfMeteringWindows && windows &&
+		    !windows->empty())
+			window = windowFromRegion(context, (*windows)[0]);
+		if (window != window_) {
+			window_ = window;
+			windowChanged_ = true;
+		}
+	}
+
+	const auto &trigger = ctrls.get(controls::AfTrigger);
+	if (trigger) {
+		if (*trigger == controls::AfTriggerStart) {
+			triggered_ = true;
+		} else if (*trigger == controls::AfTriggerCancel) {
+			triggered_ = false;
+			locked_ = false;
+		}
+	}
+}
+
+void Af::prepare([[maybe_unused]] IPAContext &context,
+		 [[maybe_unused]] const uint32_t frame,
+		 [[maybe_unused]] IPAFrameContext &frameContext,
+		 DebayerParams *params)
+{
+	params->focusWindow = window_;
+}
+
 void Af::process(IPAContext &context,
 		 const uint32_t frame,
 		 [[maybe_unused]] IPAFrameContext &frameContext,
 		 const SwIspStats *stats,
-		 [[maybe_unused]] ControlList &metadata)
+		 ControlList &metadata)
 {
 	if (!context.configuration.af.enabled)
 		return;
@@ -280,6 +364,41 @@ void Af::process(IPAContext &context,
 						   stats->sharpnessBase
 					 : 0.0)
 		<< " base " << stats->sharpnessBase;
+
+	/* What Android is told: see CameraDevice for its AF state machine. */
+	int32_t afState;
+	if (state_ != State::Focused)
+		afState = mode_ == controls::AfModeManual ? controls::AfStateIdle
+							 : controls::AfStateScanning;
+	else
+		afState = failed_ ? controls::AfStateFailed : controls::AfStateFocused;
+	metadata.set(controls::AfState, afState);
+
+	if (mode_ == controls::AfModeManual)
+		return;
+
+	/*
+	 * A touch (trigger) scans the whole range in the new window and holds
+	 * the result; a new window alone rescans in continuous mode. The stats
+	 * of the frames already in flight still use the old window: skip them.
+	 */
+	if (triggered_ || (windowChanged_ && mode_ == controls::AfModeContinuous &&
+			   !locked_)) {
+		const AfConfiguration &af = context.configuration.af;
+
+		LOG(IPASoftAf, Debug)
+			<< (triggered_ ? "Triggered" : "New window") << " scan in "
+			<< window_[0] << "," << window_[1] << " "
+			<< window_[2] << "x" << window_[3];
+		locked_ = triggered_ || locked_;
+		triggered_ = false;
+		windowChanged_ = false;
+		failed_ = false;
+		startSweep(context, State::Coarse, af.min, af.max,
+			   (af.max - af.min) / kCoarseSteps);
+		settle_ = std::max(settle_, kSettleFrames + 1);
+		return;
+	}
 
 	if (settle_) {
 		settle_--;
@@ -316,7 +435,9 @@ void Af::process(IPAContext &context,
 			reference_ = sharpness;
 			last_ = sharpness;
 		}
-		watch(context, sharpness, brightness);
+		/* Held after a touch, or single shot in auto mode. */
+		if (mode_ == controls::AfModeContinuous && !locked_)
+			watch(context, sharpness, brightness);
 		break;
 	}
 }

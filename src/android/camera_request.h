@@ -86,6 +86,12 @@ public:
 	uint8_t aeState_ = 2; /* ANDROID_CONTROL_AE_STATE_CONVERGED */
 	uint8_t flashState_ = 0; /* ANDROID_FLASH_STATE_UNAVAILABLE */
 
+	/* Autofocus: the request's mode, trigger and region, and its state. */
+	uint8_t afMode_ = 0; /* ANDROID_CONTROL_AF_MODE_OFF */
+	uint8_t afTrigger_ = 0; /* ANDROID_CONTROL_AF_TRIGGER_IDLE */
+	uint8_t afState_ = 0; /* ANDROID_CONTROL_AF_STATE_INACTIVE */
+	std::vector<int32_t> afRegions_;
+
 private:
 	LIBCAMERA_DISABLE_COPY(Camera3RequestDescriptor)
 };

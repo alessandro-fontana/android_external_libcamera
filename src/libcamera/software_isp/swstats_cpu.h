@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <array>
 #include <stdint.h>
 #include <vector>
 
@@ -41,6 +42,7 @@ public:
 
 	int configure(const StreamConfiguration &inputCfg);
 	void setWindow(const Rectangle &window);
+	void setFocusWindow(const std::array<uint16_t, 4> &window);
 	void startFrame();
 	void finishFrame(uint32_t frame, uint32_t bufferId);
 

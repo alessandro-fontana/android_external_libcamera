@@ -899,6 +899,7 @@ int CameraCapabilities::initializeStaticMetadata()
 	}
 
 	const ControlInfoMap &controlsInfo = camera_->controls();
+	afAvailable_ = controlsInfo.find(controls::AfMode.id()) != controlsInfo.end();
 	const ControlList &properties = camera_->properties();
 
 	availableCharacteristicsKeys_ = {
@@ -963,6 +964,7 @@ int CameraCapabilities::initializeStaticMetadata()
 		ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER,
 		ANDROID_CONTROL_AE_TARGET_FPS_RANGE,
 		ANDROID_CONTROL_AF_MODE,
+		ANDROID_CONTROL_AF_REGIONS,
 		ANDROID_CONTROL_AF_TRIGGER,
 		ANDROID_CONTROL_AWB_LOCK,
 		ANDROID_CONTROL_AWB_MODE,
@@ -993,6 +995,7 @@ int CameraCapabilities::initializeStaticMetadata()
 		ANDROID_CONTROL_AE_STATE,
 		ANDROID_CONTROL_AE_TARGET_FPS_RANGE,
 		ANDROID_CONTROL_AF_MODE,
+		ANDROID_CONTROL_AF_REGIONS,
 		ANDROID_CONTROL_AF_STATE,
 		ANDROID_CONTROL_AF_TRIGGER,
 		ANDROID_CONTROL_AWB_LOCK,
@@ -1081,6 +1084,11 @@ int CameraCapabilities::initializeStaticMetadata()
 	std::vector<uint8_t> availableAfModes = {
 		ANDROID_CONTROL_AF_MODE_OFF,
 	};
+	if (afAvailable_) {
+		availableAfModes.push_back(ANDROID_CONTROL_AF_MODE_AUTO);
+		availableAfModes.push_back(ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO);
+		availableAfModes.push_back(ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+	}
 	staticMetadata_->addEntry(ANDROID_CONTROL_AF_AVAILABLE_MODES,
 				  availableAfModes);
 
@@ -1112,8 +1120,9 @@ int CameraCapabilities::initializeStaticMetadata()
 	staticMetadata_->addEntry(ANDROID_CONTROL_AWB_AVAILABLE_MODES,
 				  availableAwbModes);
 
+	/* AE, AWB, AF: one AF region, the window of a touch. */
 	std::vector<int32_t> availableMaxRegions = {
-		0, 0, 0,
+		0, 0, afAvailable_ ? 1 : 0,
 	};
 	staticMetadata_->addEntry(ANDROID_CONTROL_MAX_REGIONS,
 				  availableMaxRegions);
@@ -1401,7 +1410,11 @@ int CameraCapabilities::initializeStaticMetadata()
 	staticMetadata_->addEntry(ANDROID_LENS_INFO_HYPERFOCAL_DISTANCE,
 				  hypeFocalDistance);
 
-	float minFocusDistance = 0;
+	/*
+	 * Zero means fixed focus to Android, which then sends no AF request.
+	 * In diopters, uncalibrated: 10 cm.
+	 */
+	float minFocusDistance = afAvailable_ ? 10.0f : 0;
 	staticMetadata_->addEntry(ANDROID_LENS_INFO_MINIMUM_FOCUS_DISTANCE,
 				  minFocusDistance);
 
@@ -1712,7 +1725,8 @@ std::unique_ptr<CameraMetadata> CameraCapabilities::requestTemplatePreview() con
 	requestTemplate->addEntry(ANDROID_CONTROL_AE_ANTIBANDING_MODE,
 				  aeAntibandingMode);
 
-	uint8_t afMode = ANDROID_CONTROL_AF_MODE_OFF;
+	uint8_t afMode = afAvailable_ ? ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE
+				      : ANDROID_CONTROL_AF_MODE_OFF;
 	requestTemplate->addEntry(ANDROID_CONTROL_AF_MODE, afMode);
 
 	uint8_t afTrigger = ANDROID_CONTROL_AF_TRIGGER_IDLE;
@@ -1785,6 +1799,11 @@ std::unique_ptr<CameraMetadata> CameraCapabilities::requestTemplateVideo() const
 	 */
 	previewTemplate->updateEntry(ANDROID_CONTROL_AE_TARGET_FPS_RANGE,
 				     entry.data.i32 + 2, 2);
+
+	if (afAvailable_) {
+		uint8_t afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
+		previewTemplate->updateEntry(ANDROID_CONTROL_AF_MODE, afMode);
+	}
 
 	return previewTemplate;
 }

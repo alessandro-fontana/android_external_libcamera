@@ -140,6 +140,23 @@ private:
 	void flashFrameDone(Camera3RequestDescriptor *descriptor);
 	bool setLed(bool on);
 
+	/*
+	 * Autofocus: Android's AF state machine over the IPA's AfState. A
+	 * trigger scans once and locks the result until a cancel.
+	 */
+	void afFrameDone(Camera3RequestDescriptor *descriptor);
+	struct {
+		libcamera::Mutex lock;
+		enum class Phase {
+			Idle,
+			Triggered, /* the IPA has not reported the scan yet */
+			Scanning,
+			Locked,
+		} phase = Phase::Idle;
+		unsigned int waited = 0;
+		bool focused = false;
+	} af_;
+
 	struct {
 		std::string brightness;
 		int levels = 0;

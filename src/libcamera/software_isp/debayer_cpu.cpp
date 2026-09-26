@@ -950,6 +950,7 @@ void DebayerCpu::process(uint32_t frame, FrameBuffer *input, FrameBuffer *output
 		return;
 	}
 
+	stats_->setFocusWindow(params.focusWindow);
 	stats_->startFrame();
 
 	if (inputConfig_.patternSize.height == 2 && threads_ > 1)

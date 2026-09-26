@@ -5,6 +5,11 @@
 
 #pragma once
 
+#include <array>
+
+#include <libcamera/controls.h>
+#include <libcamera/geometry.h>
+
 #include "algorithm.h"
 
 namespace libcamera {
@@ -20,6 +25,12 @@ public:
 	int init(IPAContext &context, const YamlObject &tuningData) override;
 	int configure(IPAContext &context,
 		      const IPAConfigInfo &configInfo) override;
+	void queueRequest(IPAContext &context, const uint32_t frame,
+			  IPAFrameContext &frameContext,
+			  const ControlList &controls) override;
+	void prepare(IPAContext &context, const uint32_t frame,
+		     IPAFrameContext &frameContext,
+		     DebayerParams *params) override;
 	void process(IPAContext &context, const uint32_t frame,
 		     IPAFrameContext &frameContext,
 		     const SwIspStats *stats,
@@ -42,6 +53,8 @@ private:
 	void climb(IPAContext &context, double sharpness);
 	void finish(IPAContext &context);
 	void watch(IPAContext &context, double sharpness, double brightness);
+	std::array<uint16_t, 4> windowFromRegion(const IPAContext &context,
+						 const Rectangle &region) const;
 
 	State state_;
 	unsigned int settle_;
@@ -62,6 +75,23 @@ private:
 	double lastBrightness_;
 	unsigned int changed_;
 	unsigned int steady_;
+
+	/* Android's AF: mode, the window of a touch, a scan asked for. */
+	int32_t mode_;
+	std::array<uint16_t, 4> window_;
+	bool windowChanged_;
+	bool triggered_;
+	/* After a triggered scan: hold the lens until a cancel. */
+	bool locked_;
+	/* The last coarse sweep saw no peak. */
+	bool failed_;
+
+	/*
+	 * From the tuning file: the useful lens range, from the module's
+	 * calibration (infinity and macro positions), with a margin.
+	 */
+	int32_t lensMin_ = -1;
+	int32_t lensMax_ = -1;
 };
 
 } /* namespace ipa::soft::algorithms */

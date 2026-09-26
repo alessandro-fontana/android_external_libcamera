@@ -139,6 +139,18 @@ int IPASoftSimple::init(const IPASettings &settings,
 	if (ret)
 		return ret;
 
+	/* With a focus lens: Android's AF modes, touch windows and triggers. */
+	if (lensControls.find(V4L2_CID_FOCUS_ABSOLUTE) != lensControls.end()) {
+		context_.ctrlMap[&controls::AfMode] = ControlInfo(controls::AfModeValues);
+		context_.ctrlMap[&controls::AfMetering] =
+			ControlInfo(controls::AfMeteringValues);
+		context_.ctrlMap[&controls::AfWindows] =
+			ControlInfo(Rectangle{}, Rectangle(65535, 65535, 65535, 65535),
+				    Rectangle{});
+		context_.ctrlMap[&controls::AfTrigger] =
+			ControlInfo(controls::AfTriggerValues);
+	}
+
 	*ccmEnabled = context_.ccmEnabled;
 
 	params_ = nullptr;

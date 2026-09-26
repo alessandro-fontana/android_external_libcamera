@@ -49,6 +49,12 @@ struct DebayerParams {
 	CcmLookupTable greenCcm;
 	CcmLookupTable blueCcm;
 	LookupTable gammaLut;
+
+	/*
+	 * Autofocus window: x, y, width, height as fractions of the processed
+	 * window, in 1/65535 units. A zero width keeps the default window.
+	 */
+	std::array<uint16_t, 4> focusWindow;
 };
 
 } /* namespace libcamera */

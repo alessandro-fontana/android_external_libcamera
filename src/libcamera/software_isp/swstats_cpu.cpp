@@ -468,11 +468,40 @@ void SwStatsCpu::setWindow(const Rectangle &window)
 	window_.width &= ~(patternSize_.width - 1);
 	window_.height &= ~(patternSize_.height - 1);
 
+	/* The central ninth, until the IPA asks for another window. */
+	focusWindow_ = Rectangle();
+	setFocusWindow({ 21845, 21845, 21845, 21845 });
+}
+
+/**
+ * \brief Set the window of the autofocus contrast
+ * \param[in] window x, y, width, height in 1/65535 of the stats window
+ *
+ * A zero width or height leaves the current window. Takes effect from the
+ * next frame.
+ */
+void SwStatsCpu::setFocusWindow(const std::array<uint16_t, 4> &window)
+{
+	if (!window[2] || !window[3])
+		return;
+
+	Rectangle focus;
 	/* x and width in multiples of 4: the sampling step of the stats */
-	focusWindow_.x = (window_.width / 3) & ~3u;
-	focusWindow_.y = window_.y + window_.height / 3;
-	focusWindow_.width = (window_.width / 3) & ~3u;
-	focusWindow_.height = window_.height / 3;
+	focus.x = (static_cast<uint64_t>(window_.width) * window[0] / 65535) & ~3u;
+	focus.y = window_.y + static_cast<uint64_t>(window_.height) * window[1] / 65535;
+	focus.width = std::max<unsigned int>(
+		(static_cast<uint64_t>(window_.width) * window[2] / 65535) & ~3u, 16);
+	focus.height = std::max<unsigned int>(
+		static_cast<uint64_t>(window_.height) * window[3] / 65535, 16);
+	focus.width = std::min<unsigned int>(focus.width,
+					     (window_.width - focus.x) & ~3u);
+	focus.height = std::min<unsigned int>(focus.height,
+					      window_.y + window_.height - focus.y);
+
+	if (focus == focusWindow_)
+		return;
+
+	focusWindow_ = focus;
 	focusPrev_.assign(focusWindow_.width / 4, 0);
 }
 

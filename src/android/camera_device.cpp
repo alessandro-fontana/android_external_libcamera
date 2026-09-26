@@ -485,6 +485,82 @@ void CameraDevice::updateFlash(Camera3RequestDescriptor *descriptor)
 	setLed(flash_.torch || flash_.assist);
 }
 
+/* Android's AF state for a completed request, from the IPA's AfState. */
+void CameraDevice::afFrameDone(Camera3RequestDescriptor *descriptor)
+{
+	using Phase = decltype(af_)::Phase;
+
+	if (descriptor->afMode_ == ANDROID_CONTROL_AF_MODE_OFF ||
+	    descriptor->afMode_ == ANDROID_CONTROL_AF_MODE_EDOF) {
+		descriptor->afState_ = ANDROID_CONTROL_AF_STATE_INACTIVE;
+		return;
+	}
+
+	const auto &ipaState = descriptor->request_->metadata().get(controls::AfState);
+	int32_t state = ipaState ? *ipaState : controls::AfStateIdle;
+	bool scanning = state == controls::AfStateScanning;
+
+	MutexLocker lock(af_.lock);
+
+	switch (af_.phase) {
+	case Phase::Triggered:
+		/*
+		 * The requests already in flight still report the state from
+		 * before the trigger: wait for the scan to show, or give up
+		 * on it after a while and lock what there is.
+		 */
+		if (scanning)
+			af_.phase = Phase::Scanning;
+		else if (++af_.waited > 10) {
+			af_.phase = Phase::Locked;
+			af_.focused = state == controls::AfStateFocused;
+		}
+		break;
+	case Phase::Scanning:
+		if (!scanning) {
+			af_.phase = Phase::Locked;
+			af_.focused = state == controls::AfStateFocused;
+		}
+		break;
+	default:
+		break;
+	}
+
+	switch (af_.phase) {
+	case Phase::Triggered:
+	case Phase::Scanning:
+		descriptor->afState_ = ANDROID_CONTROL_AF_STATE_ACTIVE_SCAN;
+		return;
+	case Phase::Locked:
+		descriptor->afState_ = af_.focused ? ANDROID_CONTROL_AF_STATE_FOCUSED_LOCKED
+						   : ANDROID_CONTROL_AF_STATE_NOT_FOCUSED_LOCKED;
+		return;
+	case Phase::Idle:
+		break;
+	}
+
+	if (descriptor->afMode_ == ANDROID_CONTROL_AF_MODE_AUTO ||
+	    descriptor->afMode_ == ANDROID_CONTROL_AF_MODE_MACRO) {
+		descriptor->afState_ = ANDROID_CONTROL_AF_STATE_INACTIVE;
+		return;
+	}
+
+	switch (state) {
+	case controls::AfStateScanning:
+		descriptor->afState_ = ANDROID_CONTROL_AF_STATE_PASSIVE_SCAN;
+		break;
+	case controls::AfStateFocused:
+		descriptor->afState_ = ANDROID_CONTROL_AF_STATE_PASSIVE_FOCUSED;
+		break;
+	case controls::AfStateFailed:
+		descriptor->afState_ = ANDROID_CONTROL_AF_STATE_PASSIVE_UNFOCUSED;
+		break;
+	default:
+		descriptor->afState_ = ANDROID_CONTROL_AF_STATE_INACTIVE;
+		break;
+	}
+}
+
 /* Called for each completed request, before its result metadata. */
 void CameraDevice::flashFrameDone(Camera3RequestDescriptor *descriptor)
 {
@@ -1052,6 +1128,56 @@ int CameraDevice::processControls(Camera3RequestDescriptor *descriptor)
 		}
 	}
 
+	if (camera_->controls().find(controls::AfMode.id()) != camera_->controls().end()) {
+		if (settings.getEntry(ANDROID_CONTROL_AF_MODE, &entry)) {
+			descriptor->afMode_ = *entry.data.u8;
+			int32_t mode;
+			switch (descriptor->afMode_) {
+			case ANDROID_CONTROL_AF_MODE_AUTO:
+			case ANDROID_CONTROL_AF_MODE_MACRO:
+				mode = controls::AfModeAuto;
+				break;
+			case ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO:
+			case ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE:
+				mode = controls::AfModeContinuous;
+				break;
+			default:
+				mode = controls::AfModeManual;
+				break;
+			}
+			controls.set(controls::AfMode, mode);
+		}
+
+		/* xmin, ymin, xmax, ymax, weight: a zero weight means none. */
+		if (settings.getEntry(ANDROID_CONTROL_AF_REGIONS, &entry) &&
+		    entry.count >= 5) {
+			const int32_t *r = entry.data.i32;
+			descriptor->afRegions_.assign(r, r + 5);
+			if (r[4] > 0 && r[2] > r[0] && r[3] > r[1]) {
+				controls.set(controls::AfMetering, controls::AfMeteringWindows);
+				controls.set(controls::AfWindows,
+					     { Rectangle(r[0], r[1],
+							 static_cast<unsigned int>(r[2] - r[0]),
+							 static_cast<unsigned int>(r[3] - r[1])) });
+			} else {
+				controls.set(controls::AfMetering, controls::AfMeteringAuto);
+			}
+		}
+
+		if (settings.getEntry(ANDROID_CONTROL_AF_TRIGGER, &entry)) {
+			descriptor->afTrigger_ = *entry.data.u8;
+			MutexLocker lock(af_.lock);
+			if (descriptor->afTrigger_ == ANDROID_CONTROL_AF_TRIGGER_START) {
+				controls.set(controls::AfTrigger, controls::AfTriggerStart);
+				af_.phase = decltype(af_)::Phase::Triggered;
+				af_.waited = 0;
+			} else if (descriptor->afTrigger_ == ANDROID_CONTROL_AF_TRIGGER_CANCEL) {
+				controls.set(controls::AfTrigger, controls::AfTriggerCancel);
+				af_.phase = decltype(af_)::Phase::Idle;
+			}
+		}
+	}
+
 	if (settings.getEntry(ANDROID_STATISTICS_FACE_DETECT_MODE, &entry)) {
 		/* Only set the control if the camera supports it */
 		auto iter = camera_->controls().find(controls::draft::FaceDetectMode.id());
@@ -1462,6 +1588,7 @@ void CameraDevice::requestComplete(Request *request)
 	notifyShutter(descriptor->frameNumber_, sensorTimestamp);
 
 	flashFrameDone(descriptor);
+	afFrameDone(descriptor);
 
 	LOG(HAL, Debug) << "Request " << request->cookie() << " completed with "
 			<< descriptor->request_->buffers().size() << " streams";
@@ -1716,7 +1843,7 @@ CameraDevice::getResultMetadata(const Camera3RequestDescriptor &descriptor) cons
 	 * Total bytes for JPEG metadata: 82
 	 */
 	std::unique_ptr<CameraMetadata> resultMetadata =
-		std::make_unique<CameraMetadata>(88, 166);
+		std::make_unique<CameraMetadata>(89, 190);
 	if (!resultMetadata->isValid()) {
 		LOG(HAL, Error) << "Failed to allocate result metadata";
 		return nullptr;
@@ -1762,14 +1889,19 @@ CameraDevice::getResultMetadata(const Camera3RequestDescriptor &descriptor) cons
 	value = descriptor.aeState_;
 	resultMetadata->addEntry(ANDROID_CONTROL_AE_STATE, value);
 
-	value = ANDROID_CONTROL_AF_MODE_OFF;
+	value = descriptor.afMode_;
 	resultMetadata->addEntry(ANDROID_CONTROL_AF_MODE, value);
 
-	value = ANDROID_CONTROL_AF_STATE_INACTIVE;
+	value = descriptor.afState_;
 	resultMetadata->addEntry(ANDROID_CONTROL_AF_STATE, value);
 
-	value = ANDROID_CONTROL_AF_TRIGGER_IDLE;
+	value = descriptor.afTrigger_;
 	resultMetadata->addEntry(ANDROID_CONTROL_AF_TRIGGER, value);
+
+	if (!descriptor.afRegions_.empty())
+		resultMetadata->addEntry(ANDROID_CONTROL_AF_REGIONS,
+					 descriptor.afRegions_.data(),
+					 descriptor.afRegions_.size());
 
 	value = ANDROID_CONTROL_AWB_MODE_AUTO;
 	resultMetadata->addEntry(ANDROID_CONTROL_AWB_MODE, value);
