@@ -68,10 +68,15 @@ void Awb::process(IPAContext &context,
 	 */
 	const uint64_t nPixels = std::accumulate(
 		histogram.begin(), histogram.end(), 0);
+	/*
+	 * Every statistics sample adds one red, one (averaged) green and one
+	 * blue value, and one histogram entry: each sum holds nPixels values
+	 * and carries the whole black level offset.
+	 */
 	const uint64_t offset = blackLevel * nPixels;
-	const uint64_t sumR = stats->sumR_ - offset / 4;
-	const uint64_t sumG = stats->sumG_ - offset / 2;
-	const uint64_t sumB = stats->sumB_ - offset / 4;
+	const uint64_t sumR = stats->sumR_ > offset ? stats->sumR_ - offset : 0;
+	const uint64_t sumG = stats->sumG_ > offset ? stats->sumG_ - offset : 0;
+	const uint64_t sumB = stats->sumB_ > offset ? stats->sumB_ - offset : 0;
 
 	/*
 	 * Calculate red and blue gains for AWB.
