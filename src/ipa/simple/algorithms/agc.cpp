@@ -7,6 +7,8 @@
 
 #include "agc.h"
 
+#include <algorithm>
+#include <cmath>
 #include <stdint.h>
 
 #include <libcamera/base/log.h>
@@ -37,64 +39,86 @@ static constexpr float kExposureOptimal = kExposureBinsCount / 2.0;
  */
 static constexpr float kExposureSatisfactory = 0.2;
 
+/*
+ * Frames to wait at most for a change to show in the sensor controls
+ * reported for a frame, before deciding again anyway.
+ */
+static constexpr unsigned int kMaxWait = 8;
+
 Agc::Agc()
+	: pending_(false), exposureReq_(0), gainReq_(0), waited_(0)
 {
+}
+
+int Agc::configure([[maybe_unused]] IPAContext &context,
+		   [[maybe_unused]] const IPAConfigInfo &configInfo)
+{
+	pending_ = false;
+	waited_ = 0;
+	return 0;
 }
 
 void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, double exposureMSV)
 {
-	/*
-	 * kExpDenominator of 10 gives ~10% increment/decrement;
-	 * kExpDenominator of 5 - about ~20%
-	 */
-	static constexpr uint8_t kExpDenominator = 10;
-	static constexpr uint8_t kExpNumeratorUp = kExpDenominator + 1;
-	static constexpr uint8_t kExpNumeratorDown = kExpDenominator - 1;
-
-	double next;
+	const auto &agc = context.configuration.agc;
 	int32_t &exposure = frameContext.sensor.exposure;
 	double &again = frameContext.sensor.gain;
 
-	if (exposureMSV < kExposureOptimal - kExposureSatisfactory) {
-		next = exposure * kExpNumeratorUp / kExpDenominator;
-		if (next - exposure < 1)
-			exposure += 1;
-		else
-			exposure = next;
-		if (exposure >= context.configuration.agc.exposureMax) {
-			next = again * kExpNumeratorUp / kExpDenominator;
-			if (next - again < context.configuration.agc.againMinStep)
-				again += context.configuration.agc.againMinStep;
-			else
-				again = next;
+	/*
+	 * A change reaches the sensor output some frames later. Deciding
+	 * again on frames still taken with the old values stacks corrections
+	 * on top of each other: the exposure overshoots by more than the
+	 * hysteresis and oscillates around the target. Keep asking for the
+	 * last values until the frame controls show them.
+	 */
+	if (pending_) {
+		bool arrived = exposure == exposureReq_ &&
+			       std::abs(again - gainReq_) <= 0.03 * gainReq_;
+		if (!arrived && ++waited_ < kMaxWait) {
+			exposure = exposureReq_;
+			again = gainReq_;
+			return;
 		}
+		pending_ = false;
 	}
 
-	if (exposureMSV > kExposureOptimal + kExposureSatisfactory) {
-		if (exposure == context.configuration.agc.exposureMax &&
-		    again > context.configuration.agc.againMin) {
-			next = again * kExpNumeratorDown / kExpDenominator;
-			if (again - next < context.configuration.agc.againMinStep)
-				again -= context.configuration.agc.againMinStep;
-			else
-				again = next;
-		} else {
-			next = exposure * kExpNumeratorDown / kExpDenominator;
-			if (exposure - next < 1)
-				exposure -= 1;
-			else
-				exposure = next;
-		}
-	}
+	if (std::abs(exposureMSV - kExposureOptimal) <= kExposureSatisfactory)
+		return;
 
-	exposure = std::clamp(exposure, context.configuration.agc.exposureMin,
-			      context.configuration.agc.exposureMax);
-	again = std::clamp(again, context.configuration.agc.againMin,
-			   context.configuration.agc.againMax);
+	/*
+	 * Proportional and damped: the MSV is not linear in the light, and a
+	 * full correction in one step would overshoot as well. At the ends of
+	 * the histogram the MSV says little about how far off it is: take the
+	 * largest step.
+	 */
+	double factor;
+	if (exposureMSV >= kExposureBinsCount - 0.5)
+		factor = 0.5;
+	else if (exposureMSV <= 1.2)
+		factor = 2.0;
+	else
+		factor = std::clamp(std::sqrt(kExposureOptimal / exposureMSV), 0.6, 1.6);
+
+	/* Exposure first, gain only for what the exposure cannot give. */
+	double total = exposure * again * factor;
+	int32_t nextExposure = std::clamp(static_cast<int32_t>(std::lround(total / agc.againMin)),
+					  agc.exposureMin, agc.exposureMax);
+	double nextGain = std::clamp(total / nextExposure, agc.againMin, agc.againMax);
 
 	LOG(IPASoftExposure, Debug)
-		<< "exposureMSV " << exposureMSV
-		<< " exp " << exposure << " again " << again;
+		<< "exposureMSV " << exposureMSV << " factor " << factor
+		<< " exp " << exposure << " -> " << nextExposure
+		<< " again " << again << " -> " << nextGain;
+
+	if (nextExposure == exposure && std::abs(nextGain - again) < 1e-6)
+		return;
+
+	exposure = nextExposure;
+	again = nextGain;
+	exposureReq_ = nextExposure;
+	gainReq_ = nextGain;
+	pending_ = true;
+	waited_ = 0;
 }
 
 void Agc::process(IPAContext &context,

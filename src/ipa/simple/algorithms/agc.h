@@ -19,6 +19,7 @@ public:
 	Agc();
 	~Agc() = default;
 
+	int configure(IPAContext &context, const IPAConfigInfo &configInfo) override;
 	void process(IPAContext &context, const uint32_t frame,
 		     IPAFrameContext &frameContext,
 		     const SwIspStats *stats,
@@ -26,6 +27,12 @@ public:
 
 private:
 	void updateExposure(IPAContext &context, IPAFrameContext &frameContext, double exposureMSV);
+
+	/* The last exposure and gain asked for, and frames spent waiting for them. */
+	bool pending_;
+	int32_t exposureReq_;
+	double gainReq_;
+	unsigned int waited_;
 };
 
 } /* namespace ipa::soft::algorithms */
