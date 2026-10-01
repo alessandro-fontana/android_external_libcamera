@@ -1177,10 +1177,16 @@ int CameraCapabilities::initializeStaticMetadata()
 	staticMetadata_->addEntry(ANDROID_CONTROL_MAX_REGIONS,
 				  availableMaxRegions);
 
+	/*
+	 * AF off in a scene mode means fixed focus, which a camera with a
+	 * focuser can only honour at an infinity focus calibration it does not
+	 * have: the API1 shim of the camera service then refuses the device.
+	 */
 	std::vector<uint8_t> sceneModesOverride = {
 		ANDROID_CONTROL_AE_MODE_ON,
 		ANDROID_CONTROL_AWB_MODE_AUTO,
-		ANDROID_CONTROL_AF_MODE_OFF,
+		static_cast<uint8_t>(afAvailable_ ? ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE
+						  : ANDROID_CONTROL_AF_MODE_OFF),
 	};
 	staticMetadata_->addEntry(ANDROID_CONTROL_SCENE_MODE_OVERRIDES,
 				  sceneModesOverride);
