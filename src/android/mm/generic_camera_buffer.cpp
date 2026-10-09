@@ -92,6 +92,33 @@ CameraBuffer::Private::Private([[maybe_unused]] CameraBuffer *cameraBuffer,
 	const unsigned int numPlanes = info.numPlanes();
 	planeInfo_.resize(numPlanes);
 
+	/*
+	 * Take the plane geometry from the allocator when it reports it: rows
+	 * may be padded beyond the width, and planes placed past the end of
+	 * the previous one.
+	 */
+	std::vector<android::ui::PlaneLayout> layouts;
+	if (android::GraphicBufferMapper::get().getPlaneLayouts(handle_, &layouts) == android::OK &&
+	    layouts.size() == numPlanes) {
+		bool valid = true;
+		for (unsigned int i = 0; i < numPlanes; ++i) {
+			const auto &layout = layouts[i];
+			if (layout.offsetInBytes < 0 || layout.strideInBytes <= 0 ||
+			    layout.totalSizeInBytes <= 0 ||
+			    layout.offsetInBytes + layout.totalSizeInBytes > bufferLength_) {
+				valid = false;
+				break;
+			}
+
+			planeInfo_[i].stride = layout.strideInBytes;
+			planeInfo_[i].offset = layout.offsetInBytes;
+			planeInfo_[i].size = layout.totalSizeInBytes;
+		}
+
+		if (valid)
+			return;
+	}
+
 	unsigned int offset = 0;
 	for (unsigned int i = 0; i < numPlanes; ++i) {
 		const unsigned int planeSize = info.planeSize(size, i);

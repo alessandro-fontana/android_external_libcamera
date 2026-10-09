@@ -104,9 +104,9 @@ void PostProcessorYuv::process(Camera3RequestDescriptor::StreamBuffer *streamBuf
 					sourceStride_[1],
 					sourceSize_.width, sourceSize_.height,
 					destination->plane(0).data(),
-					destinationStride_[0],
+					destination->stride(0),
 					destination->plane(1).data(),
-					destinationStride_[1],
+					destination->stride(1),
 					destinationSize_.width,
 					destinationSize_.height,
 					libyuv::FilterMode::kFilterBilinear);
@@ -115,9 +115,9 @@ void PostProcessorYuv::process(Camera3RequestDescriptor::StreamBuffer *streamBuf
 		ret = libyuv::YUY2ToNV12(sourceMapped.planes()[0].data(),
 					 sourceStride_[0],
 					 destination->plane(0).data(),
-					 destinationStride_[0],
+					 destination->stride(0),
 					 destination->plane(1).data(),
-					 destinationStride_[1],
+					 destination->stride(1),
 					 destinationSize_.width,
 					 destinationSize_.height);
 		break;
@@ -178,9 +178,9 @@ void PostProcessorYuv::process(Camera3RequestDescriptor::StreamBuffer *streamBuf
 
 		ret = libyuv::ARGBToNV12(src, srcStride,
 					 destination->plane(0).data(),
-					 destinationStride_[0],
+					 destination->stride(0),
 					 destination->plane(1).data(),
-					 destinationStride_[1],
+					 destination->stride(1),
 					 dw, dh);
 		break;
 	}
@@ -224,14 +224,19 @@ bool PostProcessorYuv::isValidBuffers(const FrameBuffer &source,
 			return false;
 		}
 	}
+	/* The destination stride is the buffer's, which may be padded. */
+	const PixelFormatInfo &destinationInfo = PixelFormatInfo::info(destinationFormat_);
 	for (unsigned int i = 0; i < destinationNumPlanes_; i++) {
-		if (destination.plane(i).size() < destinationLength_[i]) {
+		const unsigned int length =
+			destinationInfo.planeSize(destinationSize_.height, i,
+						  destination.stride(i));
+		if (destination.plane(i).size() < length) {
 			LOG(YUV, Error)
 				<< "The destination planes lengths are too small, "
 				<< "actual size[" << i << "]="
 				<< destination.plane(i).size()
 				<< ", expected size[" << i << "]="
-				<< sourceLength_[i];
+				<< length;
 			return false;
 		}
 	}
@@ -256,11 +261,5 @@ void PostProcessorYuv::calculateLengths(const StreamConfiguration &inCfg,
 							sourceStride_[i]);
 	}
 
-	const PixelFormatInfo &destinationInfo = PixelFormatInfo::info(destinationFormat_);
-	destinationNumPlanes_ = destinationInfo.numPlanes();
-	for (unsigned int i = 0; i < destinationInfo.numPlanes(); i++) {
-		destinationStride_[i] = destinationInfo.stride(destinationSize_.width, i, 1);
-		destinationLength_[i] = destinationInfo.planeSize(destinationSize_.height, i,
-								  destinationStride_[i]);
-	}
+	destinationNumPlanes_ = PixelFormatInfo::info(destinationFormat_).numPlanes();
 }
