@@ -564,6 +564,16 @@ int CameraCapabilities::initializeStreamConfigurations()
 
 		cameraResolutions.push_back(derivedSize);
 	}
+
+	/*
+	 * Add the 16:9 crop of the maximum resolution when the maximum is
+	 * taller, so that a 16:9 preview can match 16:9 stills at more than
+	 * 1280x720.
+	 */
+	const Size wideRes{ maxRes.width, (maxRes.width * 9 / 16) & ~1u };
+	if (wideRes.height < maxRes.height)
+		cameraResolutions.push_back(wideRes);
+
 	cameraResolutions.push_back(maxRes);
 
 	/* Remove duplicated entries from the list of supported resolutions. */
