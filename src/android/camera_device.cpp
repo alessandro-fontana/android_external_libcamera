@@ -913,6 +913,9 @@ int CameraDevice::configureStreams(camera3_stream_configuration_t *stream_list)
 		 */
 		stream->usage |= GRALLOC_USAGE_HW_CAMERA_WRITE;
 
+		/* A size above the stream limit is scaled up from a smaller one. */
+		size = capabilities_.sourceSize(size);
+
 		/*
 		 * If a CameraStream with the same size and format as the
 		 * current stream has already been requested, associate the two.

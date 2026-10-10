@@ -499,6 +499,16 @@ CameraCapabilities::initializeRawResolutions(const PixelFormat &pixelFormat)
 	return supportedResolutions;
 }
 
+/* The largest size with the aspect ratio of size within bound, even sized. */
+static Size cropToAspectRatio(const Size &bound, const Size &size)
+{
+	if (static_cast<uint64_t>(size.width) * bound.height >
+	    static_cast<uint64_t>(size.height) * bound.width)
+		return { bound.width & ~1u, (bound.width * size.height / size.width) & ~1u };
+
+	return { (bound.height * size.width / size.height) & ~1u, bound.height & ~1u };
+}
+
 /*
  * Initialize the format conversion map to translate from Android format
  * identifier to libcamera pixel formats and fill in the list of supported
@@ -779,6 +789,28 @@ int CameraCapabilities::initializeStreamConfigurations()
 			 */
 			resolutions = initializeYUVResolutions(mappedFormat,
 							       cameraResolutions);
+
+			/*
+			 * Mandatory sizes above the stream limit, scaled up by
+			 * the conversion from the crop of the same aspect ratio
+			 * that the camera produces.
+			 */
+			if (!conversionMap_.count(androidFormat))
+				break;
+
+			for (const Size &res : camera3Resolutions) {
+				if (res.width <= maxRes.width &&
+				    res.height <= maxRes.height)
+					continue;
+
+				const Size source = cropToAspectRatio(maxRes, res);
+				if (std::find(resolutions.begin(), resolutions.end(),
+					      source) == resolutions.end())
+					continue;
+
+				upscaledSizes_[res] = source;
+				resolutions.push_back(res);
+			}
 			break;
 		}
 
@@ -790,7 +822,7 @@ int CameraCapabilities::initializeStreamConfigurations()
 			 * \todo Avoid the need to configure the camera when
 			 * redesigning the configuration API.
 			 */
-			cfg.size = res;
+			cfg.size = sourceSize(res);
 			int ret = camera_->configure(cameraConfig.get());
 			if (ret)
 				return ret;
@@ -871,7 +903,8 @@ int CameraCapabilities::initializeStreamConfigurations()
 			 * use the same frame durations as collected for
 			 * the YUV/RGB streams.
 			 */
-			if (androidFormat == HAL_PIXEL_FORMAT_YCbCr_420_888) {
+			if (androidFormat == HAL_PIXEL_FORMAT_YCbCr_420_888 &&
+			    !upscaledSizes_.count(res)) {
 				streamConfigurations_.push_back({
 					res, HAL_PIXEL_FORMAT_BLOB,
 					minFrameDuration, maxFrameDuration,
@@ -1694,6 +1727,12 @@ PixelFormat CameraCapabilities::toPixelFormat(int format) const
  * Check if we need to do software conversion via a post-processor
  * for an Android format code
  */
+Size CameraCapabilities::sourceSize(const Size &size) const
+{
+	auto it = upscaledSizes_.find(size);
+	return it == upscaledSizes_.end() ? size : it->second;
+}
+
 bool CameraCapabilities::needConversion(int format) const
 {
 	/* Not an error: most formats are produced without a conversion. */

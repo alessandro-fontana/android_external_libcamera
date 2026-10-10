@@ -37,6 +37,8 @@ public:
 	unsigned int maxJpegBufferSize() const { return maxJpegBufferSize_; }
 	/* A JPEG size captured in a separate full resolution configuration */
 	bool isStillSize(const libcamera::Size &size) const;
+	/* The size the camera produces for a stream, scaled up if different */
+	libcamera::Size sourceSize(const libcamera::Size &size) const;
 	libcamera::PixelFormat stillFormat() const { return stillFormat_; }
 
 	std::unique_ptr<CameraMetadata> requestTemplateManual() const;
@@ -80,6 +82,7 @@ private:
 	bool hasFlash_ = false;
 	libcamera::Size maxStreamSize_;
 	std::vector<libcamera::Size> stillSizes_;
+	std::map<libcamera::Size, libcamera::Size> upscaledSizes_;
 	libcamera::PixelFormat stillFormat_;
 	/* A focus lens driven by the IPA: Android's AF modes and one AF region */
 	bool afAvailable_ = false;
