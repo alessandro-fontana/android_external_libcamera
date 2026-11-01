@@ -140,7 +140,9 @@ void Lut::prepare(IPAContext &context,
 			params->green[i] = gammaTable[static_cast<unsigned int>(lutGains.g())];
 			params->blue[i] = gammaTable[static_cast<unsigned int>(lutGains.b())];
 		}
-	} else if (context.activeState.ccm.changed || gammaUpdateNeeded) {
+	} else if (context.activeState.ccm.changed || gammaUpdateNeeded ||
+		   gains != lastGains_) {
+		lastGains_ = gains;
 		const auto &ccm = context.activeState.ccm.ccm;
 		auto &red = params->redCcm;
 		auto &green = params->greenCcm;

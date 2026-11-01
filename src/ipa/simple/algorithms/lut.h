@@ -40,6 +40,9 @@ private:
 	void updateGammaTable(IPAContext &context);
 	int16_t ccmValue(float value, float ccm) const;
 
+	/* The white balance gains in the colour matrix tables */
+	RGB<float> lastGains_;
+
 	/* From the tuning file: the defaults of the gamma curve. */
 	float gamma_ = 0.5;
 	float contrast_ = 1.0;
