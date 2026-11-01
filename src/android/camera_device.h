@@ -163,6 +163,7 @@ private:
 	bool setLed(bool on);
 	bool setStrobe(bool on);
 	float flashExposureValue();
+	bool flashColourGains(float gains[2]);
 
 	/*
 	 * Autofocus: Android's AF state machine over the IPA's AfState. A
@@ -193,6 +194,9 @@ private:
 		double ambient = 0;
 		double lit = 0;
 		double litExposure = 0;
+		/* Their colour: red and blue over green */
+		double ambientRed = 0, ambientBlue = 0;
+		double litRed = 0, litBlue = 0;
 		libcamera::Mutex lock;
 		bool torch = false; /* FLASH_MODE_TORCH, or set_torch_mode */
 		bool assist = false; /* from the precapture to the capture */

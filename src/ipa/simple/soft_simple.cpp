@@ -339,6 +339,15 @@ int IPASoftSimple::start(const ControlList &controls, ControlList *sensorControl
 	 * A still lit by the flash: the exposure the configuration starts
 	 * with, scaled. Exposure time first, as the AGC would.
 	 */
+	/*
+	 * The white balance of the light the still will have, which the
+	 * statistics of the frames before it could not measure.
+	 */
+	const auto colourGains = controls.get(controls::ColourGains);
+	if (colourGains)
+		context_.activeState.awb.gains = { { (*colourGains)[0], 1.0f,
+						      (*colourGains)[1] } };
+
 	const auto ev = controls.get(controls::ExposureValue);
 	auto &agc = context_.activeState.agc;
 	if (!ev || *ev == 0.0f || !agc.startValid)

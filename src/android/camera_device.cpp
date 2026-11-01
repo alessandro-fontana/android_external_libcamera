@@ -10,6 +10,7 @@
 #include <libcamera/orientation.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <chrono>
 #include <fstream>
@@ -469,6 +470,40 @@ float CameraDevice::flashExposureValue()
 	return std::clamp(static_cast<float>(std::log2(scale)), -6.0f, 2.0f);
 }
 
+/*
+ * The white balance gains for a still lit by the strobe, from the light
+ * and its colour without and with the torch, mixed as the exposure value
+ * mixes the light. Lux is a luminance: split it into the three channels.
+ * Returns false when the precapture did not meter both.
+ */
+bool CameraDevice::flashColourGains(float gains[2])
+{
+	if (flash_.ambient <= 0 || flash_.lit <= 0 ||
+	    flash_.ambientRed <= 0 || flash_.ambientBlue <= 0 ||
+	    flash_.litRed <= 0 || flash_.litBlue <= 0)
+		return false;
+
+	auto channels = [](double lux, double red, double blue) {
+		double green = lux / (0.299 * red + 0.587 + 0.114 * blue);
+		return std::array<double, 3>{ red * green, green, blue * green };
+	};
+	const auto ambient = channels(flash_.ambient, flash_.ambientRed,
+				      flash_.ambientBlue);
+	const auto lit = channels(flash_.lit, flash_.litRed, flash_.litBlue);
+
+	std::array<double, 3> strobe;
+	for (unsigned int i = 0; i < 3; i++)
+		strobe[i] = ambient[i] +
+			    flash_.gain * std::max(lit[i] - ambient[i], 0.0);
+	if (strobe[0] <= 0 || strobe[2] <= 0)
+		return false;
+
+	/* The AWB limits its own gains to 4 */
+	gains[0] = std::clamp(static_cast<float>(strobe[1] / strobe[0]), 0.25f, 4.0f);
+	gains[1] = std::clamp(static_cast<float>(strobe[1] / strobe[2]), 0.25f, 4.0f);
+	return true;
+}
+
 /* The torch outside a camera session (Android's flashlight). */
 int CameraDevice::setTorchMode(bool enable)
 {
@@ -631,12 +666,24 @@ void CameraDevice::flashFrameDone(Camera3RequestDescriptor *descriptor)
 	/* The light metered before and during the precapture. */
 	const auto &time = descriptor->request_->metadata().get(controls::ExposureTime);
 	const auto &lux = descriptor->request_->metadata().get(controls::Lux);
+	const auto &colourGains =
+		descriptor->request_->metadata().get(controls::ColourGains);
 	if (gain && time && lux && *lux > 0 && !descriptor->still_) {
+		/* The white balance gains undo the colour of the light. */
+		double red = 0, blue = 0;
+		if (colourGains && (*colourGains)[0] > 0 && (*colourGains)[1] > 0) {
+			red = 1 / (*colourGains)[0];
+			blue = 1 / (*colourGains)[1];
+		}
 		if (!flash_.ledOn) {
 			flash_.ambient = *lux;
+			flash_.ambientRed = red;
+			flash_.ambientBlue = blue;
 		} else if (flash_.assist && !flash_.precaptureFrames) {
 			flash_.lit = *lux;
 			flash_.litExposure = *time * *gain;
+			flash_.litRed = red;
+			flash_.litBlue = blue;
 		}
 	}
 
@@ -1739,6 +1786,12 @@ int CameraDevice::processStill(std::unique_ptr<Camera3RequestDescriptor> descrip
 			if (!flash_.strobe.empty() && setStrobe(true)) {
 				float ev = flashExposureValue();
 				startControls.set(controls::ExposureValue, ev);
+				float gains[2];
+				if (flashColourGains(gains)) {
+					startControls.set(controls::ColourGains, gains);
+					LOG(HAL, Debug) << "Still colour gains "
+							<< gains[0] << ", " << gains[1];
+				}
 				strobe = true;
 				LOG(HAL, Debug) << "Still lit by the strobe, exposure value "
 					        << ev << " (ambient " << flash_.ambient
