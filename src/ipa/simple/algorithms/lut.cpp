@@ -63,13 +63,12 @@ void Lut::updateGammaTable(IPAContext &context)
 {
 	auto &gammaTable = context.activeState.gamma.gammaTable;
 	const auto blackLevel = context.activeState.blc.level;
-	const unsigned int blackIndex = blackLevel * gammaTable.size() / 256;
 	const auto contrast = context.activeState.knobs.contrast.value_or(contrast_);
 
-	std::fill(gammaTable.begin(), gammaTable.begin() + blackIndex, 0);
-	const float divisor = gammaTable.size() - blackIndex - 1.0;
-	for (unsigned int i = blackIndex; i < gammaTable.size(); i++) {
-		double normalized = (i - blackIndex) / divisor;
+	/* The black level is subtracted before the gains, in prepare() */
+	const float divisor = gammaTable.size() - 1.0;
+	for (unsigned int i = 0; i < gammaTable.size(); i++) {
+		double normalized = i / divisor;
 		/* Convert 0..2 to 0..infinity; avoid actual inifinity at tan(pi/2) */
 		double contrastExp = tan(std::clamp(contrast * M_PI_4, 0.0, M_PI_2 - 0.00001));
 		/* Apply simple S-curve */
@@ -85,9 +84,9 @@ void Lut::updateGammaTable(IPAContext &context)
 	context.activeState.gamma.contrast = contrast;
 }
 
-int16_t Lut::ccmValue(unsigned int i, float ccm) const
+int16_t Lut::ccmValue(float value, float ccm) const
 {
-	return std::round(i * ccm);
+	return std::round(value * ccm);
 }
 
 void Lut::prepare(IPAContext &context,
@@ -118,32 +117,46 @@ void Lut::prepare(IPAContext &context,
 	const double div = static_cast<double>(DebayerParams::kRGBLookupSize) /
 			   gammaTableSize;
 
+	/*
+	 * Processing order: black level, gains, colour matrix, gamma. The
+	 * black level goes first and the range above it is stretched back
+	 * to the full scale: subtracted after the gains, it would be scaled
+	 * by them and leave a colour cast in the shadows.
+	 */
+	constexpr float kMaxValue = DebayerParams::kRGBLookupSize - 1;
+	const float black = context.activeState.blc.level;
+	const float scale = DebayerParams::kRGBLookupSize /
+			    std::max(DebayerParams::kRGBLookupSize - black, 1.0f);
+	auto aboveBlack = [&](unsigned int i) {
+		return std::max(static_cast<float>(i) - black, 0.0f) * scale;
+	};
+
 	if (!context.ccmEnabled) {
 		for (unsigned int i = 0; i < DebayerParams::kRGBLookupSize; i++) {
 			/* Apply gamma after gain! */
-			const RGB<float> lutGains = (gains * i / div).min(gammaTableSize - 1);
+			const RGB<float> lutGains =
+				(gains * aboveBlack(i) / div).min(gammaTableSize - 1);
 			params->red[i] = gammaTable[static_cast<unsigned int>(lutGains.r())];
 			params->green[i] = gammaTable[static_cast<unsigned int>(lutGains.g())];
 			params->blue[i] = gammaTable[static_cast<unsigned int>(lutGains.b())];
 		}
 	} else if (context.activeState.ccm.changed || gammaUpdateNeeded) {
-		Matrix<float, 3, 3> gainCcm = { { gains.r(), 0, 0,
-						  0, gains.g(), 0,
-						  0, 0, gains.b() } };
-		auto ccm = context.activeState.ccm.ccm * gainCcm;
+		const auto &ccm = context.activeState.ccm.ccm;
 		auto &red = params->redCcm;
 		auto &green = params->greenCcm;
 		auto &blue = params->blueCcm;
 		for (unsigned int i = 0; i < DebayerParams::kRGBLookupSize; i++) {
-			red[i].r = ccmValue(i, ccm[0][0]);
-			red[i].g = ccmValue(i, ccm[1][0]);
-			red[i].b = ccmValue(i, ccm[2][0]);
-			green[i].r = ccmValue(i, ccm[0][1]);
-			green[i].g = ccmValue(i, ccm[1][1]);
-			green[i].b = ccmValue(i, ccm[2][1]);
-			blue[i].r = ccmValue(i, ccm[0][2]);
-			blue[i].g = ccmValue(i, ccm[1][2]);
-			blue[i].b = ccmValue(i, ccm[2][2]);
+			/* Clip before the matrix, to keep saturated areas neutral */
+			const RGB<float> rgb = (gains * aboveBlack(i)).min(kMaxValue);
+			red[i].r = ccmValue(rgb.r(), ccm[0][0]);
+			red[i].g = ccmValue(rgb.r(), ccm[1][0]);
+			red[i].b = ccmValue(rgb.r(), ccm[2][0]);
+			green[i].r = ccmValue(rgb.g(), ccm[0][1]);
+			green[i].g = ccmValue(rgb.g(), ccm[1][1]);
+			green[i].b = ccmValue(rgb.g(), ccm[2][1]);
+			blue[i].r = ccmValue(rgb.b(), ccm[0][2]);
+			blue[i].g = ccmValue(rgb.b(), ccm[1][2]);
+			blue[i].b = ccmValue(rgb.b(), ccm[2][2]);
 			params->gammaLut[i] = gammaTable[i / div];
 		}
 	}
