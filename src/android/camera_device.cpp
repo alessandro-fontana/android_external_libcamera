@@ -913,6 +913,18 @@ int CameraDevice::configureStreams(camera3_stream_configuration_t *stream_list)
 		 */
 		stream->usage |= GRALLOC_USAGE_HW_CAMERA_WRITE;
 
+		/*
+		 * The HAL chooses the dataspace of IMPLEMENTATION_DEFINED
+		 * streams, and the consumers read it to convert the YUV data:
+		 * declare the range and matrix the YUV post-processor writes,
+		 * limited range BT.601 for video encoding, JFIF otherwise.
+		 */
+		if (stream->format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED)
+			stream->data_space =
+				(stream->usage & GRALLOC_USAGE_HW_VIDEO_ENCODER)
+					? HAL_DATASPACE_V0_BT601_625
+					: HAL_DATASPACE_V0_JFIF;
+
 		/* A size above the stream limit is scaled up from a smaller one. */
 		size = capabilities_.sourceSize(size);
 

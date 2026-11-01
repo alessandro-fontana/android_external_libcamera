@@ -1086,6 +1086,12 @@ ScopedAStatus LibcameraDeviceSession::configureStreams(
         out.resize(stream_list.num_streams);
         for (size_t i = 0; i < stream_list.num_streams; i++) {
             convertToAidl(static_cast<Camera3Stream*>(streams[i]), &out[i]);
+            // The HAL may override the dataspace, which out[i] reports.
+            // Keep the requested one: the next configuration repeats it
+            // for the streams it keeps.
+            streams[i]->data_space = mapToLegacyDataspace(
+                    static_cast<android_dataspace_t>(
+                            in_requestedConfiguration.streams[i].dataSpace));
         }
         mFirstRequest = true;
         // Increment stream configuration counter for signalStreamFlush race condition handling

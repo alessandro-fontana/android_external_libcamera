@@ -85,6 +85,21 @@ Stream *CameraStream::stream() const
 	return configuration().stream();
 }
 
+/*
+ * Unknown counts as full range: JFIF is the dataspace of camera YUV
+ * streams unless the client asks for another one.
+ */
+static bool isFullRange(android_dataspace_t dataSpace)
+{
+	switch (dataSpace) {
+	case HAL_DATASPACE_UNKNOWN:
+	case HAL_DATASPACE_JFIF:
+		return true;
+	default:
+		return (dataSpace & HAL_DATASPACE_RANGE_MASK) == HAL_DATASPACE_RANGE_FULL;
+	}
+}
+
 int CameraStream::configure()
 {
 	if (type_ == Type::Internal || type_ == Type::Mapped) {
@@ -100,7 +115,8 @@ int CameraStream::configure()
 		case formats::NV12:
 		case formats::YUYV:
 		case formats::XRGB8888:
-			postProcessor_ = std::make_unique<PostProcessorYuv>();
+			postProcessor_ = std::make_unique<PostProcessorYuv>(
+				isFullRange(camera3Stream_->data_space));
 			break;
 
 		case formats::MJPEG:

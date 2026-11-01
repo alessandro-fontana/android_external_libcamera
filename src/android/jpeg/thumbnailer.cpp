@@ -14,6 +14,7 @@
 #include "libcamera/internal/mapped_framebuffer.h"
 
 #include <libyuv/convert_from_argb.h>
+#include <libyuv/planar_functions.h>
 #include <libyuv/scale_argb.h>
 
 using namespace libcamera;
@@ -74,9 +75,17 @@ void Thumbnailer::createThumbnail(const FrameBuffer &source,
 		libyuv::ARGBScale(frame.planes()[0].data(), sw * 4, sw, sh,
 				  scaled.data(), tw * 4, tw, th,
 				  libyuv::kFilterBilinear);
-		libyuv::ARGBToNV12(scaled.data(), tw * 4,
+		/* Full range, as libjpeg encodes it (JFIF) */
+		const unsigned int cw = (tw + 1) / 2;
+		const unsigned int ch = (th + 1) / 2;
+		std::vector<unsigned char> chroma(cw * ch * 2);
+		libyuv::ARGBToJ420(scaled.data(), tw * 4,
 				   destination->data(), tw,
-				   destination->data() + tw * th, tw, tw, th);
+				   chroma.data(), cw,
+				   chroma.data() + cw * ch, cw, tw, th);
+		libyuv::MergeUVPlane(chroma.data(), cw,
+				     chroma.data() + cw * ch, cw,
+				     destination->data() + tw * th, tw, cw, ch);
 		return;
 	}
 

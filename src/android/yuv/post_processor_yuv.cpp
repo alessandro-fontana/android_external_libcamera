@@ -11,6 +11,7 @@
 
 #include <libyuv/convert.h>
 #include <libyuv/convert_from_argb.h>
+#include <libyuv/planar_functions.h>
 #include <libyuv/scale.h>
 #include <libyuv/scale_argb.h>
 
@@ -141,10 +142,10 @@ void PostProcessorYuv::process(Camera3RequestDescriptor::StreamBuffer *streamBuf
 			if (static_cast<uint64_t>(cw) * ch < static_cast<uint64_t>(dw) * dh) {
 				const size_t lumaSize = static_cast<size_t>(cw) * ch;
 				scaled_.resize(lumaSize * 3 / 2);
-				ret = libyuv::ARGBToNV12(crop, srcStride,
-							 scaled_.data(), cw,
-							 scaled_.data() + lumaSize, cw,
-							 cw, ch);
+				ret = argbToNV12(crop, srcStride,
+						 scaled_.data(), cw,
+						 scaled_.data() + lumaSize, cw,
+						 cw, ch);
 				if (ret)
 					break;
 				ret = libyuv::NV12Scale(scaled_.data(), cw,
@@ -169,12 +170,12 @@ void PostProcessorYuv::process(Camera3RequestDescriptor::StreamBuffer *streamBuf
 			srcStride = dw * 4;
 		}
 
-		ret = libyuv::ARGBToNV12(src, srcStride,
-					 destination->plane(0).data(),
-					 destination->stride(0),
-					 destination->plane(1).data(),
-					 destination->stride(1),
-					 dw, dh);
+		ret = argbToNV12(src, srcStride,
+				 destination->plane(0).data(),
+				 destination->stride(0),
+				 destination->plane(1).data(),
+				 destination->stride(1),
+				 dw, dh);
 		break;
 	}
 	default:
@@ -190,6 +191,34 @@ void PostProcessorYuv::process(Camera3RequestDescriptor::StreamBuffer *streamBuf
 	}
 
 	processComplete.emit(streamBuffer, PostProcessor::Status::Success);
+}
+
+/*
+ * Convert to NV12 in the range the stream declares. libyuv has no full
+ * range NV12 conversion: go through I420 and interleave the chroma.
+ */
+int PostProcessorYuv::argbToNV12(const uint8_t *src, int srcStride,
+				 uint8_t *dstY, int dstStrideY,
+				 uint8_t *dstUV, int dstStrideUV,
+				 int width, int height)
+{
+	if (!fullRange_)
+		return libyuv::ARGBToNV12(src, srcStride, dstY, dstStrideY,
+					  dstUV, dstStrideUV, width, height);
+
+	const int cw = (width + 1) / 2;
+	const int ch = (height + 1) / 2;
+	chroma_.resize(static_cast<size_t>(cw) * ch * 2);
+	uint8_t *u = chroma_.data();
+	uint8_t *v = u + static_cast<size_t>(cw) * ch;
+
+	int ret = libyuv::ARGBToJ420(src, srcStride, dstY, dstStrideY,
+				     u, cw, v, cw, width, height);
+	if (ret)
+		return ret;
+
+	libyuv::MergeUVPlane(u, cw, v, cw, dstUV, dstStrideUV, cw, ch);
+	return 0;
 }
 
 bool PostProcessorYuv::isValidBuffers(const FrameBuffer &source,
