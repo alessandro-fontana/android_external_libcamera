@@ -102,6 +102,8 @@ private:
 	Size patternSize_;
 
 	unsigned int xShift_;
+	/* Right shift bringing the colour sums to 8 bits per sample */
+	unsigned int sumShift_;
 
 	SharedMemObject<SwIspStats> sharedStats_;
 	SwIspStats stats_;

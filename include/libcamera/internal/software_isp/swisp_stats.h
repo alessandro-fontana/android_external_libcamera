@@ -21,15 +21,15 @@ namespace libcamera {
  */
 struct SwIspStats {
 	/**
-	 * \brief Holds the sum of all sampled red pixels
+	 * \brief Holds the sum of all sampled red pixels, in 8-bit units
 	 */
 	uint64_t sumR_;
 	/**
-	 * \brief Holds the sum of all sampled green pixels
+	 * \brief Holds the sum of all sampled green pixels, in 8-bit units
 	 */
 	uint64_t sumG_;
 	/**
-	 * \brief Holds the sum of all sampled blue pixels
+	 * \brief Holds the sum of all sampled blue pixels, in 8-bit units
 	 */
 	uint64_t sumB_;
 	/**

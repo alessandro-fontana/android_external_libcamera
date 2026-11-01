@@ -356,6 +356,11 @@ void SwStatsCpu::startFrame(void)
  */
 void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
 {
+	/* Report the sums in the 8-bit scale of the histogram and black level */
+	stats_.sumR_ >>= sumShift_;
+	stats_.sumG_ >>= sumShift_;
+	stats_.sumB_ >>= sumShift_;
+
 	*sharedStats_ = stats_;
 	statsReady.emit(frame, bufferId);
 }
@@ -412,12 +417,15 @@ int SwStatsCpu::configure(const StreamConfiguration &inputCfg)
 		switch (bayerFormat.bitDepth) {
 		case 8:
 			stats0_ = &SwStatsCpu::statsBGGR8Line0;
+			sumShift_ = 0;
 			return 0;
 		case 10:
 			stats0_ = &SwStatsCpu::statsBGGR10Line0;
+			sumShift_ = 2;
 			return 0;
 		case 12:
 			stats0_ = &SwStatsCpu::statsBGGR12Line0;
+			sumShift_ = 4;
 			return 0;
 		}
 	}
@@ -429,6 +437,8 @@ int SwStatsCpu::configure(const StreamConfiguration &inputCfg)
 		/* Skip every 3th and 4th line, sample every other 2x2 block */
 		ySkipMask_ = 0x02;
 		xShift_ = 0;
+		/* The packed line functions sample the 8 most significant bits */
+		sumShift_ = 0;
 
 		switch (bayerFormat.order) {
 		case BayerFormat::BGGR:
