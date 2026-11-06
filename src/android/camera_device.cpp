@@ -1306,6 +1306,13 @@ int CameraDevice::processControls(Camera3RequestDescriptor *descriptor)
 		}
 	}
 
+	if (camera_->controls().find(controls::FrameDurationLimits.id()) != camera_->controls().end() &&
+	    settings.getEntry(ANDROID_CONTROL_AE_TARGET_FPS_RANGE, &entry) &&
+	    entry.count == 2 && entry.data.i32[0] > 0 && entry.data.i32[1] > 0) {
+		const int64_t limits[] = { 1000000 / entry.data.i32[1], 1000000 / entry.data.i32[0] };
+		controls.set(controls::FrameDurationLimits, Span<const int64_t, 2>(limits));
+	}
+
 	if (camera_->controls().find(controls::AfMode.id()) != camera_->controls().end()) {
 		if (settings.getEntry(ANDROID_CONTROL_AF_MODE, &entry)) {
 			descriptor->afMode_ = *entry.data.u8;
