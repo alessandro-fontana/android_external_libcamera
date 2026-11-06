@@ -134,6 +134,7 @@ private:
 	void memcpyNextLine(const uint8_t *linePointers[]);
 	void process2(const uint8_t *src, uint8_t *dst);
 	void process2Threaded(const uint8_t *src, uint8_t *dst);
+	const uint8_t *cleanFrame(const uint8_t *copy, unsigned int rows);
 	void debayerRows2(const uint8_t *src, uint8_t *dst, unsigned int rowStart,
 			  unsigned int rowEnd);
 	const uint8_t *rowPointer2(const uint8_t *src, int row) const;
@@ -168,6 +169,7 @@ private:
 	/* Parallel debayering of 2-line patterns */
 	unsigned int threads_;
 	std::vector<uint8_t> frameCopy_;
+	std::vector<uint8_t> frameClean_;
 	bool swapRedBlueGains_;
 	unsigned int measuredFrames_;
 	int64_t frameProcessTime_;

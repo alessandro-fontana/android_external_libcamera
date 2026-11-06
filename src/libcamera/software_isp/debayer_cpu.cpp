@@ -769,6 +769,75 @@ void DebayerCpu::debayerStripe2(const uint8_t *src, uint8_t *dst,
 	memcpy(dst + rowStart * ostride, tmp.data(), tmp.size());
 }
 
+namespace {
+
+/*
+ * Limit each pixel to the range of its four nearest neighbours of the same
+ * colour, plus a margin that grows with the signal. Defective pixels of the
+ * sensor stand alone, and the demosaicing would turn them into coloured dots;
+ * detail reaches the neighbours through the lens and stays within the margin.
+ */
+void clampDefects(uint16_t *dst, const uint16_t *up, const uint16_t *line,
+		  const uint16_t *down, unsigned int width)
+{
+	constexpr uint16_t kMargin = 12;
+
+	dst[0] = line[0];
+	dst[1] = line[1];
+	dst[width - 2] = line[width - 2];
+	dst[width - 1] = line[width - 1];
+
+	for (unsigned int x = 2; x < width - 2; x++) {
+		const uint16_t hi = std::max(std::max(line[x - 2], line[x + 2]),
+					     std::max(up[x], down[x]));
+		const uint16_t lo = std::min(std::min(line[x - 2], line[x + 2]),
+					     std::min(up[x], down[x]));
+		const uint16_t top = hi + kMargin + (hi >> 3);
+		const uint16_t bottom = lo - std::min<uint16_t>(lo, kMargin + (lo >> 3));
+
+		dst[x] = std::min(std::max(line[x], bottom), top);
+	}
+}
+
+} /* namespace */
+
+/* Filter the \a rows rows of \a copy into frameClean_, over the same threads. */
+const uint8_t *DebayerCpu::cleanFrame(const uint8_t *copy, unsigned int rows)
+{
+	const size_t stride = inputConfig_.stride;
+	const unsigned int width = stride / sizeof(uint16_t);
+	const unsigned int chunk = (rows + threads_ - 1) / threads_;
+	std::vector<std::thread> workers;
+
+	frameClean_.resize(stride * rows);
+	uint8_t *clean = frameClean_.data();
+
+	for (unsigned int i = 0; i < threads_; i++) {
+		const unsigned int start = i * chunk;
+		const unsigned int end = std::min(rows, start + chunk);
+		if (start >= end)
+			break;
+		workers.emplace_back([=] {
+			for (unsigned int r = start; r < end; r++) {
+				/* Past the edges, the row on the other side. */
+				const unsigned int up = r >= 2 ? r - 2 : r + 2;
+				const unsigned int down = r + 2 < rows ? r + 2 : r - 2;
+
+				clampDefects(reinterpret_cast<uint16_t *>(clean + r * stride),
+					     reinterpret_cast<const uint16_t *>(copy + up * stride),
+					     reinterpret_cast<const uint16_t *>(copy + r * stride),
+					     reinterpret_cast<const uint16_t *>(copy + down * stride),
+					     width);
+			}
+		});
+	}
+
+	for (std::thread &w : workers)
+		w.join();
+
+	return clean;
+}
+
 void DebayerCpu::process2Threaded(const uint8_t *src, uint8_t *dst)
 {
 	const unsigned int height = window_.height;
@@ -813,7 +882,12 @@ void DebayerCpu::process2Threaded(const uint8_t *src, uint8_t *dst)
 		for (std::thread &w : workers)
 			w.join();
 		workers.clear();
-		src = copy - first * static_cast<ptrdiff_t>(stride) + xOffset;
+
+		const uint8_t *frame = copy;
+		if (inputConfig_.bpp == 16 && rows > 4)
+			frame = cleanFrame(copy, rows);
+
+		src = frame - first * static_cast<ptrdiff_t>(stride) + xOffset;
 	}
 	for (unsigned int i = 1; i < threads_; i++) {
 		unsigned int start = i * stripe;
