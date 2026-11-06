@@ -63,6 +63,9 @@ static constexpr unsigned int kMaxWait = 8;
  */
 static constexpr unsigned int kFlickerPeriodDefault = 10000;
 
+/* The shortest frame the frame duration limits offer, in microseconds. */
+static constexpr int64_t kMinFrameTime = 33333;
+
 /* The linear mean the AGC settles on, until it has settled once. */
 static constexpr double kYGoalDefault = 0.25;
 
@@ -81,7 +84,42 @@ int Agc::init([[maybe_unused]] IPAContext &context, const YamlObject &tuningData
 	saturatedMin_ = saturatedMax_ / 2;
 	binningGain_ = tuningData["binningGain"].get<double>(1.0);
 	flickerPeriod_ = tuningData["flickerPeriod"].get<unsigned int>(kFlickerPeriodDefault) * 1us;
+	maxFrameTime_ = tuningData["maxFrameTime"].get<unsigned int>(0) * 1us;
+	stretchGain_ = tuningData["stretchGain"].get<double>(0.0);
+
+	if (maxFrameTime_ > 0us) {
+		const int64_t limits[] = { kMinFrameTime,
+					   static_cast<int64_t>(maxFrameTime_.get<std::micro>()) };
+		context.ctrlMap[&controls::FrameDurationLimits] =
+			ControlInfo(limits[0], limits[1],
+				    ControlValue(Span<const int64_t, 2>(limits)));
+	}
+
 	return 0;
+}
+
+/* The exposure a frame of at most \a frameTime allows, past the default frame. */
+void Agc::setExposureLimit(IPAContext &context, utils::Duration frameTime) const
+{
+	const auto &cfg = context.configuration.agc;
+	const int32_t lines = frameTime / cfg.lineDuration;
+	const int32_t extra = std::clamp(lines - cfg.exposureMax, 0,
+					 cfg.vblankMax - cfg.vblankMin);
+
+	context.activeState.agc.exposureLimit = cfg.exposureMax + extra;
+}
+
+void Agc::queueRequest(IPAContext &context,
+		       [[maybe_unused]] const uint32_t frame,
+		       [[maybe_unused]] IPAFrameContext &frameContext,
+		       const ControlList &controls)
+{
+	const auto &limits = controls.get(controls::FrameDurationLimits);
+	if (!limits || maxFrameTime_ == 0us)
+		return;
+
+	const utils::Duration requested = (*limits)[1] * 1us;
+	setExposureLimit(context, std::min(maxFrameTime_, requested));
 }
 
 /*
@@ -96,8 +134,21 @@ void Agc::split(const IPAContext &context, double total,
 {
 	const auto &agc = context.configuration.agc;
 
+	const int32_t limit = context.activeState.agc.exposureLimit;
 	exposure = std::clamp(static_cast<int32_t>(std::lround(total / agc.againMin)),
-			      agc.exposureMin, agc.exposureMax);
+			      agc.exposureMin, limit);
+
+	/*
+	 * Longer frames lower the frame rate: fill the default frame, then
+	 * raise the gain up to stretchGain_, and only then stretch the frame.
+	 */
+	if (exposure > agc.exposureMax && stretchGain_ > agc.againMin) {
+		if (total / agc.exposureMax <= stretchGain_)
+			exposure = agc.exposureMax;
+		else
+			exposure = std::clamp(static_cast<int32_t>(std::lround(total / stretchGain_)),
+					      agc.exposureMax, limit);
+	}
 
 	utils::Duration time = exposure * agc.lineDuration;
 	if (flickerPeriod_ > 0us && time >= flickerPeriod_) {
@@ -115,6 +166,8 @@ int Agc::configure(IPAContext &context, const IPAConfigInfo &configInfo)
 {
 	pending_ = false;
 	waited_ = 0;
+
+	setExposureLimit(context, maxFrameTime_);
 
 	auto &agc = context.activeState.agc;
 	agc.initial = false;
@@ -179,6 +232,21 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
 		gainReq_ = state.startGain;
 		pending_ = true;
 		waited_ = 0;
+	}
+
+	/* The frame rate asked for may have changed: no frame longer than it allows. */
+	if (exposure > state.exposureLimit) {
+		int32_t nextExposure;
+		double nextGain;
+
+		split(context, exposure * again, nextExposure, nextGain);
+		exposure = nextExposure;
+		again = nextGain;
+		exposureReq_ = nextExposure;
+		gainReq_ = nextGain;
+		pending_ = true;
+		waited_ = 0;
+		return;
 	}
 
 	/*

@@ -562,6 +562,9 @@ SimpleCameraData::SimpleCameraData(SimplePipelineHandler *pipe,
 		{ V4L2_CID_ANALOGUE_GAIN, { delays.gainDelay, false } },
 		{ V4L2_CID_EXPOSURE, { delays.exposureDelay, false } },
 	};
+	/* First: it sets how long an exposure the sensor accepts. */
+	if (sensor_->controls().count(V4L2_CID_VBLANK))
+		params[V4L2_CID_VBLANK] = { delays.vblankDelay, true };
 	delayedCtrls_ = std::make_unique<DelayedControls>(sensor_->device(), params);
 
 	LOG(SimplePipeline, Debug)

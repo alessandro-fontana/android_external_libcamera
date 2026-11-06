@@ -21,6 +21,9 @@ public:
 
 	int init(IPAContext &context, const YamlObject &tuningData) override;
 	int configure(IPAContext &context, const IPAConfigInfo &configInfo) override;
+	void queueRequest(IPAContext &context, const uint32_t frame,
+			  IPAFrameContext &frameContext,
+			  const ControlList &controls) override;
 	void process(IPAContext &context, const uint32_t frame,
 		     IPAFrameContext &frameContext,
 		     const SwIspStats *stats,
@@ -31,6 +34,7 @@ private:
 			    double exposureMSV, double saturated);
 	void split(const IPAContext &context, double total,
 		   int32_t &exposure, double &gain) const;
+	void setExposureLimit(IPAContext &context, utils::Duration frameTime) const;
 
 	/* The last exposure and gain asked for, and frames spent waiting for them. */
 	bool pending_;
@@ -51,6 +55,9 @@ private:
 	double yGoal_ = 0;
 	/* Mains flicker period to keep the exposure a multiple of, 0 = off */
 	utils::Duration flickerPeriod_;
+	/* Longest frame in dim light, from the tuning file, 0 = the sensor's default */
+	utils::Duration maxFrameTime_;
+	double stretchGain_;
 };
 
 } /* namespace ipa::soft::algorithms */

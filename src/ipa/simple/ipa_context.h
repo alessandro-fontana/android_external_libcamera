@@ -33,6 +33,8 @@ struct IPASessionConfiguration {
 	float gamma;
 	struct {
 		int32_t exposureMin, exposureMax;
+		/* The sensor's vertical blanking, equal if it cannot change it */
+		int32_t vblankMin, vblankMax;
 		double againMin, againMax, againMinStep;
 		utils::Duration lineDuration;
 	} agc;
@@ -60,6 +62,8 @@ struct IPAActiveState {
 			bool valid;
 		} byBin[4];
 		unsigned int bin;
+		/* Past exposureMax the frame gets longer, up to this exposure */
+		int32_t exposureLimit;
 		int32_t initialExposure;
 		double initialGain;
 		bool initial;

@@ -251,6 +251,11 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo,
 		context_.sensorInfo.minLineLength * 1.0s / context_.sensorInfo.pixelRate;
 	context_.configuration.agc.exposureMin = exposureInfo.min().get<int32_t>();
 	context_.configuration.agc.exposureMax = exposureInfo.max().get<int32_t>();
+	const auto vblank = sensorInfoMap_.find(V4L2_CID_VBLANK);
+	if (vblank != sensorInfoMap_.end()) {
+		context_.configuration.agc.vblankMin = vblank->second.min().get<int32_t>();
+		context_.configuration.agc.vblankMax = vblank->second.max().get<int32_t>();
+	}
 	if (!context_.configuration.agc.exposureMin) {
 		LOG(IPASoft, Warning) << "Minimum exposure is zero, that can't be linear";
 		context_.configuration.agc.exposureMin = 1;
@@ -440,6 +445,10 @@ void IPASoftSimple::processStats(const uint32_t frame,
 	ControlList ctrls(sensorInfoMap_);
 
 	auto &againNew = frameContext.sensor.gain;
+	const auto &agc = context_.configuration.agc;
+	if (agc.vblankMax > agc.vblankMin)
+		ctrls.set(V4L2_CID_VBLANK,
+			  agc.vblankMin + std::max(frameContext.sensor.exposure - agc.exposureMax, 0));
 	ctrls.set(V4L2_CID_EXPOSURE, frameContext.sensor.exposure);
 	ctrls.set(V4L2_CID_ANALOGUE_GAIN,
 		  static_cast<int32_t>(camHelper_ ? camHelper_->gainCode(againNew) : againNew));
