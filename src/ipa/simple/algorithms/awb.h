@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "algorithm.h"
 
 namespace libcamera {
@@ -19,6 +21,7 @@ public:
 	Awb() = default;
 	~Awb() = default;
 
+	int init(IPAContext &context, const YamlObject &tuningData) override;
 	int configure(IPAContext &context, const IPAConfigInfo &configInfo) override;
 	void prepare(IPAContext &context,
 		     const uint32_t frame,
@@ -29,6 +32,17 @@ public:
 		     IPAFrameContext &frameContext,
 		     const SwIspStats *stats,
 		     ControlList &metadata) override;
+
+private:
+	/* A white of the sensor: R/G and B/G under a light of temperature ct */
+	struct White {
+		float ct;
+		float r;
+		float b;
+	};
+
+	/* The two ends of the sensor's white line, from the tuning file */
+	std::vector<White> whiteCurve_;
 };
 
 } /* namespace ipa::soft::algorithms */
