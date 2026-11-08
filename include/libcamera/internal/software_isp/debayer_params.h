@@ -55,6 +55,16 @@ struct DebayerParams {
 	 * window, in 1/65535 units. A zero width keeps the default window.
 	 */
 	std::array<uint16_t, 4> focusWindow;
+
+	/*
+	 * The white line of the sensor for the grey statistics: R/G and B/G
+	 * at one end, their change to the other end, and the distance from
+	 * the line a sample may have, all in 1/1024. A zero distance turns
+	 * the grey statistics off.
+	 */
+	std::array<int32_t, 5> greyLine;
+	/* Black level, in 8-bit units, for the grey statistics */
+	uint8_t greyBlack;
 };
 
 } /* namespace libcamera */

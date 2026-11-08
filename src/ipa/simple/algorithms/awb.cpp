@@ -39,6 +39,8 @@ int Awb::init([[maybe_unused]] IPAContext &context, const YamlObject &tuningData
 		whiteCurve_.push_back({ *ct, *r, *b });
 	}
 
+	greyDistance_ = tuningData["greyDistance"].get<float>(0.0f);
+
 	if (!whiteCurve_.empty() && whiteCurve_.size() != 2) {
 		LOG(IPASoftAwb, Error) << "whiteCurve takes two points";
 		return -EINVAL;
@@ -62,8 +64,21 @@ int Awb::configure(IPAContext &context, const IPAConfigInfo &configInfo)
 void Awb::prepare(IPAContext &context,
 		  [[maybe_unused]] const uint32_t frame,
 		  IPAFrameContext &frameContext,
-		  [[maybe_unused]] DebayerParams *params)
+		  DebayerParams *params)
 {
+	params->greyLine = {};
+	if (!whiteCurve_.empty() && greyDistance_ > 0) {
+		const White &w0 = whiteCurve_[0];
+		const White &w1 = whiteCurve_[1];
+		params->greyLine = { {
+			static_cast<int32_t>(w0.r * 1024), static_cast<int32_t>(w0.b * 1024),
+			static_cast<int32_t>((w1.r - w0.r) * 1024),
+			static_cast<int32_t>((w1.b - w0.b) * 1024),
+			static_cast<int32_t>(greyDistance_ * 1024),
+		} };
+	}
+	params->greyBlack = context.activeState.blc.level;
+
 	auto &gains = context.activeState.awb.gains;
 	/* Just report, the gains are applied in LUT algorithm. */
 	frameContext.gains.red = gains.r();
@@ -126,10 +141,23 @@ void Awb::process(IPAContext &context,
 		const White &w1 = whiteCurve_[1];
 		const float dr = w1.r - w0.r;
 		const float db = w1.b - w0.b;
-		const float r = static_cast<float>(sumR) / sumG;
-		const float b = static_cast<float>(sumB) / sumG;
+		/*
+		 * From the samples near the line when there are enough of them:
+		 * a large coloured area does not move them.
+		 */
+		const bool grey = stats->greyCount >= std::max<uint64_t>(64, nPixels / 100) &&
+				  stats->greySumG > 0;
+		const float r = grey ? static_cast<float>(stats->greySumR) / stats->greySumG
+				     : static_cast<float>(sumR) / sumG;
+		const float b = grey ? static_cast<float>(stats->greySumB) / stats->greySumG
+				     : static_cast<float>(sumB) / sumG;
 		const float t = std::clamp(((r - w0.r) * dr + (b - w0.b) * db) /
 					   (dr * dr + db * db), 0.0f, 1.0f);
+
+		LOG(IPASoftAwb, Debug)
+			<< "grey samples " << stats->greyCount << " of " << nPixels
+			<< (grey ? " (used)" : " (not used)") << ", R/G " << r
+			<< " B/G " << b << ", t " << t;
 
 		gains = { { 1 / (w0.r + t * dr), 1.0, 1 / (w0.b + t * db) } };
 		/* Temperature is linear on the line in mireds. */

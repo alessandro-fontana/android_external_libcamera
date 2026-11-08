@@ -54,6 +54,17 @@ struct SwIspStats {
 	 * sharpness independent of the exposure
 	 */
 	uint64_t sharpnessBase;
+	/**
+	 * \brief Sums of the samples whose colour lies near the white line of
+	 * the sensor, black level subtracted, in sensor units
+	 */
+	uint64_t greySumR;
+	uint64_t greySumG;
+	uint64_t greySumB;
+	/**
+	 * \brief Number of such samples
+	 */
+	uint32_t greyCount;
 };
 
 } /* namespace libcamera */

@@ -43,6 +43,8 @@ private:
 
 	/* The two ends of the sensor's white line, from the tuning file */
 	std::vector<White> whiteCurve_;
+	/* How far from the line a sample counts as grey, in R/G and B/G */
+	float greyDistance_ = 0;
 };
 
 } /* namespace ipa::soft::algorithms */

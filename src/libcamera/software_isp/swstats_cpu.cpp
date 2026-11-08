@@ -11,6 +11,9 @@
 
 #include "swstats_cpu.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include <libcamera/base/log.h>
 
 #include <libcamera/stream.h>
@@ -141,13 +144,48 @@ static constexpr unsigned int kRedYMul = 77; /* 0.299 * 256 */
 static constexpr unsigned int kGreenYMul = 150; /* 0.587 * 256 */
 static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
 
+/*
+ * Sum a sample apart when its colour lies near the white line (the distance
+ * of the point R/G, B/G to the line, multiplied by G to avoid dividing).
+ */
+inline void SwStatsCpu::greySample(int64_t r, int64_t g, int64_t b, unsigned int div,
+				   uint64_t &sumR, uint64_t &sumG, uint64_t &sumB,
+				   uint32_t &count) const
+{
+	const int64_t black = grey_.black * div;
+	const int64_t R = r - black;
+	const int64_t G = g - black;
+	const int64_t B = b - black;
+
+	if (G < 8 * div || R <= 0 || B <= 0 ||
+	    std::max({ r, g, b }) >= 240 * static_cast<int64_t>(div))
+		return;
+
+	const int64_t u = R * 1024 - grey_.r0 * G;
+	const int64_t v = B * 1024 - grey_.b0 * G;
+	const int64_t across = u * grey_.db - v * grey_.dr;
+	const int64_t along = u * grey_.dr + v * grey_.db;
+	if (std::abs(across) >= grey_.distance * G ||
+	    along <= grey_.tMin * G || along >= grey_.tMax * G)
+		return;
+
+	sumR += R;
+	sumG += G;
+	sumB += B;
+	count++;
+}
+
 #define SWSTATS_START_LINE_STATS(pixel_t) \
 	pixel_t r, g, g2, b;              \
 	uint64_t yVal;                    \
                                           \
 	uint64_t sumR = 0;                \
 	uint64_t sumG = 0;                \
-	uint64_t sumB = 0;
+	uint64_t sumB = 0;                \
+	uint64_t greyR = 0;               \
+	uint64_t greyG = 0;               \
+	uint64_t greyB = 0;               \
+	uint32_t greyN = 0;
 
 #define SWSTATS_ACCUMULATE_LINE_STATS(div) \
 	sumR += r;                         \
@@ -157,12 +195,19 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
 	yVal = r * kRedYMul;               \
 	yVal += g * kGreenYMul;            \
 	yVal += b * kBlueYMul;             \
-	stats_.yHistogram[yVal * SwIspStats::kYHistogramSize / (256 * 256 * (div))]++;
+	stats_.yHistogram[yVal * SwIspStats::kYHistogramSize / (256 * 256 * (div))]++; \
+                                           \
+	if (grey_.enabled)                 \
+		greySample(r, g, b, (div), greyR, greyG, greyB, greyN);
 
 #define SWSTATS_FINISH_LINE_STATS() \
 	stats_.sumR_ += sumR;       \
 	stats_.sumG_ += sumG;       \
-	stats_.sumB_ += sumB;
+	stats_.sumB_ += sumB;       \
+	stats_.greySumR += greyR;   \
+	stats_.greySumG += greyG;   \
+	stats_.greySumB += greyB;   \
+	stats_.greyCount += greyN;
 
 void SwStatsCpu::statsBGGR8Line0(const uint8_t *src[])
 {
@@ -344,6 +389,10 @@ void SwStatsCpu::startFrame(void)
 	stats_.yHistogram.fill(0);
 	stats_.sharpness = 0;
 	stats_.sharpnessBase = 0;
+	stats_.greySumR = 0;
+	stats_.greySumG = 0;
+	stats_.greySumB = 0;
+	stats_.greyCount = 0;
 	focusPrevValid_ = false;
 }
 
@@ -481,6 +530,35 @@ void SwStatsCpu::setWindow(const Rectangle &window)
 	/* The central ninth, until the IPA asks for another window. */
 	focusWindow_ = Rectangle();
 	setFocusWindow({ 21845, 21845, 21845, 21845 });
+}
+
+/**
+ * \brief Set the white line for the grey statistics
+ * \param[in] line R/G, B/G at one end and their change to the other end, and
+ * the distance from the line a sample may have, in 1/1024
+ * \param[in] black The black level, in 8-bit units
+ *
+ * Samples whose colour lies within the distance of the line, between a little
+ * before one end and a little after the other, neither too dark nor near
+ * saturation, are summed apart: the white balance can tell the light from
+ * them, while large coloured areas would mislead the sums of all samples.
+ * A zero distance turns them off.
+ */
+void SwStatsCpu::setGreyLine(const std::array<int32_t, 5> &line, uint8_t black)
+{
+	grey_.enabled = line[4] > 0;
+	if (!grey_.enabled)
+		return;
+
+	grey_.r0 = line[0];
+	grey_.b0 = line[1];
+	grey_.dr = line[2];
+	grey_.db = line[3];
+	const int64_t length2 = grey_.dr * grey_.dr + grey_.db * grey_.db;
+	grey_.distance = line[4] * static_cast<int64_t>(std::sqrt(static_cast<double>(length2)));
+	grey_.tMin = -length2 / 10;
+	grey_.tMax = length2 + length2 / 10;
+	grey_.black = black;
 }
 
 /**

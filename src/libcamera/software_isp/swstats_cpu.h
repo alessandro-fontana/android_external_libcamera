@@ -43,6 +43,7 @@ public:
 	int configure(const StreamConfiguration &inputCfg);
 	void setWindow(const Rectangle &window);
 	void setFocusWindow(const std::array<uint16_t, 4> &window);
+	void setGreyLine(const std::array<int32_t, 5> &line, uint8_t black);
 	void startFrame();
 	void finishFrame(uint32_t frame, uint32_t bufferId);
 
@@ -93,6 +94,18 @@ private:
 
 	/* The focus window, the central ninth of window_ */
 	Rectangle focusWindow_;
+
+	void greySample(int64_t r, int64_t g, int64_t b, unsigned int div,
+			uint64_t &sumR, uint64_t &sumG, uint64_t &sumB,
+			uint32_t &count) const;
+
+	/* The white line for the grey statistics, see setGreyLine() */
+	struct {
+		bool enabled;
+		int64_t r0, b0, dr, db;
+		int64_t distance, tMin, tMax;
+		unsigned int black;
+	} grey_ = {};
 	unsigned int currentY_;
 	unsigned int focusLeft_;
 	/* Green samples of the previous sampled line in the focus window */
